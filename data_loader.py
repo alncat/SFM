@@ -134,7 +134,7 @@ class DataLoader(object):
         image_all, intrinsics = self.data_augmentation(
             image_all, intrinsics, self.img_height, self.img_width)
         image_all = tf.image.random_contrast(image_all, 0.3, 1.0)
-        image_all = tf.image.random_brightness(image_all, 0.2)
+        #image_all = tf.image.random_brightness(image_all, 0.2)
         tgt_image = image_all[:, :, :, :3]
         src_image_stack = image_all[:, :, :, 3:]
         intrinsics = self.get_multi_scale_intrinsics(
@@ -183,9 +183,15 @@ class DataLoader(object):
             cy = intrinsics[:,1,2] - tf.cast(offset_y, dtype=tf.float32)
             intrinsics = self.make_intrinsics_matrix(fx, fy, cx, cy)
             return im, intrinsics
+        def random_flipping(im):
+            flip = tf.random_uniform([], 0, 1)
+            im = tf.case([(tf.less(flip, 0.5), lambda: tf.reverse(im, axis=1))], default = lambda: im)
+            #im = tf.image.flip_up_down(im)
+            return im
         im, intrinsics = random_scaling(im, intrinsics)
         im, intrinsics = random_cropping(im, intrinsics, out_h, out_w)
         im = tf.cast(im, dtype=tf.uint8)
+        #im = random_flipping(im)
         return im, intrinsics
 
     def format_file_list(self, data_root, split):

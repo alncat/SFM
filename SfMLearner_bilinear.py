@@ -38,7 +38,7 @@ class SfMLearner(object):
 
         #with tf.name_scope("depth_prediction"):
         if not self.use_cspn:
-            pred_disp, depth_net_endpoints = network.disp_bilinear(tgt_image,
+            pred_disp, depth_net_endpoints = network.disp_aspp_u(tgt_image,
                                                   args, is_training, reuse, [opt.img_height, opt.img_width])
             pred_depth = [1./d for d in pred_disp]
         else:
@@ -78,9 +78,9 @@ class SfMLearner(object):
                 [int(opt.img_height/(2**s)), int(opt.img_width/(2**s))])
             #aspp_up25 = slim.conv2d(aspp_up2, depth, [3, 3], scope="ASPP_up25",rate=5)
 
-            #if opt.smooth_weight > 0 and not self.use_cspn:
-            #    smooth_loss += opt.smooth_weight/(2**s) * \
-            #        self.compute_smooth_loss(pred_disp[s])
+            if opt.smooth_weight > 0 and not self.use_cspn:
+                smooth_loss += opt.smooth_weight/(2**s) * \
+                    self.compute_smooth_loss(pred_disp[s])
 
             for i in range(opt.num_source):
                 # Inverse warp the source image to the target image frame
@@ -379,7 +379,7 @@ class SfMLearner(object):
                 pred_depth, depth_net_endpoints = disp_net_cspn(
                         input_mc, is_training=False)
             else:
-                pred_disp, depth_net_endpoints = network.disp_bilinear(
+                pred_disp, depth_net_endpoints = network.disp_aspp_u(
                     input_mc, args, False, False, [self.img_height, self.img_width])
                 pred_depth = [1./disp for disp in pred_disp]
         pred_depth = pred_depth[0]

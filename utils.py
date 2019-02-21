@@ -273,15 +273,6 @@ def bilinear_sampler_naive(imgs, coords):
   Returns:
     A new sampled image [batch, height_t, width_t, channels]
   """
-  def _repeat(x, n_repeats):
-    rep = tf.transpose(
-        tf.expand_dims(tf.ones(shape=tf.stack([
-            n_repeats,
-        ])), 1), [1, 0])
-    #rep = tf.cast(rep, 'float32')
-    x = tf.matmul(tf.reshape(x, (-1, 1)), rep)
-    return tf.reshape(x, [-1])
-
   with tf.name_scope('image_sampling'):
     coords_x, coords_y = tf.split(coords, [1, 1], axis=3)
     inp_size = imgs.get_shape()
@@ -303,63 +294,19 @@ def bilinear_sampler_naive(imgs, coords):
 
     x0_safe = tf.cast(tf.clip_by_value(x0, zero, x_max), 'int32')
     y0_safe = tf.cast(tf.clip_by_value(y0, zero, y_max), 'int32')
-    #x1_safe = tf.clip_by_value(x1, zero, x_max)
-    #y1_safe = tf.clip_by_value(y1, zero, y_max)
-
-    ## bilinear interp weights, with points outside the grid having weight 0
-    # wt_x0 = (x1 - coords_x) * tf.cast(tf.equal(x0, x0_safe), 'float32')
-    # wt_x1 = (coords_x - x0) * tf.cast(tf.equal(x1, x1_safe), 'float32')
-    # wt_y0 = (y1 - coords_y) * tf.cast(tf.equal(y0, y0_safe), 'float32')
-    # wt_y1 = (coords_y - y0) * tf.cast(tf.equal(y1, y1_safe), 'float32')
-
-    #wt_x0 = x1_safe - coords_x
-    #wt_x1 = coords_x - x0_safe
-    #wt_y0 = y1_safe - coords_y
-    #wt_y1 = coords_y - y0_safe
-
-    ## indices in the flat image to sample from
-    #dim2 = tf.cast(inp_size[2], 'float32')
     dim2 = inp_size[2]
-    #dim1 = tf.cast(inp_size[2] * inp_size[1], 'float32')
     dim1 = inp_size[2]*inp_size[1]
-    #base = tf.reshape(
-    #    _repeat(
-    #        tf.cast(tf.range(coord_size[0]), 'float32') * dim1,
-    #        coord_size[1] * coord_size[2]),
-    #    [out_size[0], out_size[1], out_size[2], 1])
     base = tf.reshape(tf.range(coord_size[0])*dim1, [out_size[0], 1, 1, 1])
-    #base = tf.reshape(
-    #        _repeat(
-    #            tf.range(coord_size[0]) * dim1,
-    #            coord_size[1] * coord_size[2]),
-    #        [out_size[0], out_size[1], out_size[2], 1])
 
     base_y0 = base + y0_safe * dim2
-    #base_y1 = base + y1_safe * dim2
-    #idx00 = tf.reshape(x0_safe + base_y0, [-1])
     idx00 = x0_safe + base_y0
-    #idx01 = x0_safe + base_y1
-    #idx10 = x1_safe + base_y0
-    #idx11 = x1_safe + base_y1
     idx00 = tf.reshape(idx00, [out_size[0], out_size[1], out_size[2]])
 
     ## sample from imgs
     imgs_flat = tf.reshape(imgs, tf.stack([-1, inp_size[3]]))
     imgs_flat = tf.cast(imgs_flat, 'float32')
     output = tf.gather(imgs_flat, idx00)
-    #im01 = tf.reshape(tf.gather(imgs_flat, tf.cast(idx01, 'int32')), out_size)
-    #im10 = tf.reshape(tf.gather(imgs_flat, tf.cast(idx10, 'int32')), out_size)
-    #im11 = tf.reshape(tf.gather(imgs_flat, tf.cast(idx11, 'int32')), out_size)
 
-    #w00 = wt_x0 * wt_y0
-    #w01 = wt_x0 * wt_y1
-    #w10 = wt_x1 * wt_y0
-    #w11 = wt_x1 * wt_y1
-
-    #output = tf.add_n([
-    #    w00 * im00, w01 * im01,
-    #    w10 * im10, w11 * im11
-    #])
     mask = 1. - tf.cast(tf.equal(output, 0), 'float32')
     mask = slim.avg_pool2d(mask, 3, 1, 'SAME')
 
@@ -600,7 +547,7 @@ def _tf_fspecial_gauss(size, sigma):
 @slim.add_arg_scope
 def bilinear_conv2d(net, scope_name, kernel_size, in_depth, out_depth, rate, reuse=None, activation_fn=tf.nn.elu):
     with tf.variable_scope(scope_name, reuse=reuse) as scope:
-        upsampled_size = (kernel_size - 1)*rate + 1
+        upsampled_size = (kernel_size - 1)*(rate - 1) + kernel_size
         kernel = slim.model_variable('weights',
                                       shape=[kernel_size, kernel_size, in_depth, out_depth],
                                       initializer=tf.truncated_normal_initializer(stddev=0.1))

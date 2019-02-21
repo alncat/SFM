@@ -3,7 +3,7 @@ import tensorflow as tf
 import pprint
 import random
 import numpy as np
-from SfMLearner_con_naive import SfMLearner
+from SfMLearner_bilinear import SfMLearner
 import os
 
 flags = tf.app.flags

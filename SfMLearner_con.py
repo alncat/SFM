@@ -33,8 +33,8 @@ class SfMLearner(object):
             #else:
             #    tgt_image, src_image_stack, intrinsics = loader.load_val_batch()
             #tgt_image, src_image_stack, intrinsics = loader()
-        tgt_image = self.preprocess_image(tgt_image)
-        src_image_stack = self.preprocess_image(src_image_stack)
+        tgt_image = self.preprocess_image(tgt_image, is_training)
+        src_image_stack = self.preprocess_image(src_image_stack, is_training)
 
         #with tf.name_scope("depth_prediction"):
         if not self.use_cspn:
@@ -77,9 +77,9 @@ class SfMLearner(object):
             curr_src_image_stack = tf.image.resize_area(src_image_stack,
                 [int(opt.img_height/(2**s)), int(opt.img_width/(2**s))])
 
-            #if opt.smooth_weight > 0 and not self.use_cspn:
-            #    smooth_loss += opt.smooth_weight/(2**s) * \
-            #        self.compute_smooth_loss(pred_disp[s])
+            if opt.smooth_weight > 0 and not self.use_cspn:
+                smooth_loss += opt.smooth_weight/(2**s) * \
+                    self.compute_smooth_loss(pred_disp[s])
 
             for i in range(opt.num_source):
                 # Inverse warp the source image to the target image frame
@@ -402,9 +402,12 @@ class SfMLearner(object):
             self.inputs = input_uint8
             self.pred_poses = pred_poses
 
-    def preprocess_image(self, image):
+    def preprocess_image(self, image, is_training=False):
         # Assuming input image is uint8
         image = tf.image.convert_image_dtype(image, dtype=tf.float32)
+        #if is_training:
+        #    image = tf.image.random_brightness(image, 0.1)
+        #    image = tf.clip_by_value(image, 0., 1.)
         return image * 2. -1.
 
     def deprocess_image(self, image):

@@ -192,14 +192,15 @@ def resnet_v2(inputs,
                 if output_stride is not None:
                     if output_stride % 4 != 0:
                         raise ValueError('The output_stride needs to be a multiple of 4.')
-                    output_stride /= 4
+                    output_stride /= 2
                 # We do not include batch normalization or activation functions in
                 # conv1 because the first ResNet unit will perform these. Cf.
                 # Appendix of [2].
                 with slim.arg_scope([slim.conv2d],
                                     activation_fn=None, normalizer_fn=None):
                     net = resnet_utils.conv2d_same(net, 64, 7, stride=2, scope='conv1')
-                net = slim.max_pool2d(net, [3, 3], stride=2, scope='pool1')
+                    slim.utils.collect_named_outputs(end_points_collection, scope+"/root_block", net)
+                #net = slim.max_pool2d(net, [3, 3], stride=2, scope='pool1')
             net = resnet_utils.stack_blocks_dense(net, blocks, multi_grid, output_stride)
             # This is needed because the pre-activation variant does not have batch
             # normalization or activation functions in the residual unit output. See
@@ -277,6 +278,27 @@ def resnet_v2_50(inputs,
 
 
 resnet_v2_50.default_image_size = resnet_v2.default_image_size
+
+def resnet_v2_50_mod(inputs,
+                 num_classes=None,
+                 is_training=True,
+                 multi_grid=[1, 2, 4],
+                 global_pool=True,
+                 output_stride=None,
+                 spatial_squeeze=True,
+                 reuse=None,
+                 scope='resnet_v2_50'):
+    """ResNet-50 model of [1]. See resnet_v2() for arg and return description."""
+    blocks = [
+        resnet_v2_block('block1', base_depth=64, num_units=3, stride=2),
+        resnet_v2_block('block2', base_depth=128, num_units=4, stride=2),
+        resnet_v2_block('block3', base_depth=256, num_units=6, stride=2),
+        resnet_v2_block('block4', base_depth=512, num_units=3, stride=2),
+    ]
+    return resnet_v2(inputs, blocks, num_classes, is_training=is_training,
+                     global_pool=global_pool, output_stride=output_stride, multi_grid=multi_grid,
+                     include_root_block=False, spatial_squeeze=spatial_squeeze,
+                     reuse=reuse, scope=scope)
 
 
 def resnet_v2_101(inputs,
