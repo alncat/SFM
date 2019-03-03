@@ -36,8 +36,9 @@ def atrous_spatial_pyramid_pooling(net, scope, depth=256, reuse=None, activation
         net = slim.conv2d(net, depth, [1, 1], scope="conv_1x1_output", activation_fn=activation_fn)
         return net
 
+#257
 @slim.add_arg_scope
-def atrous_deep(net, scope, rates=[2,3,5], depth=256, reuse=None, activation_fn=tf.nn.elu):
+def atrous_deep(net, scope, rates=[2,5,7], depth=256, reuse=None, activation_fn=tf.nn.elu):
 
     with tf.variable_scope(scope, reuse=reuse):
         feature_map_size = tf.shape(net)
@@ -48,10 +49,10 @@ def atrous_deep(net, scope, rates=[2,3,5], depth=256, reuse=None, activation_fn=
         #added a lower level feature
         #at_pool3x3_2 = tf.concat([at_pool3x3_2, at_pool3x3_1], axis=3)
 
-        at_pool3x3_3 = slim.conv2d(at_pool3x3_2, depth, [3, 3], scope="conv_3x3_3", rate=rates[2], activation_fn=None, normalizer_fn=None)
+        #at_pool3x3_3 = slim.conv2d(at_pool3x3_2, depth, [3, 3], scope="conv_3x3_3", rate=rates[2], activation_fn=None, normalizer_fn=None)
         #at_pool3x3_3 = slim.conv2d(at_pool3x3_2, depth, [3, 3], scope="conv_3x3_3", rate=rates[2])
 
-        return at_pool3x3_3
+        return at_pool3x3_2
 
 @slim.add_arg_scope
 def bilinear_deep(net, scope, in_depth=256, rates=[2,3,5], depth=256, reuse=None, activation_fn=tf.nn.elu):
@@ -211,7 +212,7 @@ def disp_aspp(inputs, args, is_training, reuse, size):
                                                       activation_fn=tf.nn.elu)):
         resnet = getattr(resnet_v2, args.resnet_model)
         args.resnet_model = "resnet_v2_50"
-        net, end_points = resnet(inputs,
+        _, end_points = resnet(inputs,
                                is_training=is_training,
                                global_pool=False,
                                spatial_squeeze=False,
@@ -220,7 +221,7 @@ def disp_aspp(inputs, args, is_training, reuse, size):
 
         with tf.variable_scope("DeepLab_v3", reuse=reuse):
             # get block 4 feature outputs
-            #net = end_points[args.resnet_model + '/']
+            net = end_points[args.resnet_model + '/block4']
 
             net = atrous_spatial_pyramid_pooling(net, "ASPP_layer", depth=256, reuse=reuse)
 
@@ -229,22 +230,23 @@ def disp_aspp(inputs, args, is_training, reuse, size):
             upnet1 = tf.image.resize_bilinear(net, [size[0]//8, size[1]//8])
             aspp_up1 = atrous_deep(upnet1, "ASPP_up1", depth=128, reuse=reuse)
             #concat1 = tf.concat([upnet1, aspp_up1], axis=3)
-            upnet1 = slim.conv2d(upnet1, 128, [1, 1])
+            #upnet1 = slim.conv2d(upnet1, 128, [1, 1])
             #concat1 = slim.batch_norm(tf.multiply(upnet1, aspp_up1))
             concat1 = tf.concat([upnet1, aspp_up1], axis=3)
             #icnv1 = slim.conv2d(concat1, 128, [3,3], scope='icnv1')
             #block3 = slim.conv2d(end_points[args.resnet_model + '/block3'], 128, [1, 1])
             #icnv1 = tf.concat([concat1, block3], axis=3)
-            #icnv1 = slim.conv2d(concat1, 128, [3,3], scope='icnv1')
+            icnv1 = slim.conv2d(concat1, 128, [3,3], scope='icnv1')
 
             #upsample2
-            upicnv1 = tf.image.resize_bilinear(concat1, [size[0]//4, size[1]//4])
+            upicnv1 = tf.image.resize_bilinear(icnv1, [size[0]//4, size[1]//4])
 
-            aspp_up2 = atrous_deep(upicnv1, "ASPP_up2", depth=64, reuse=reuse)
+            aspp_up2 = atrous_deep(upicnv1, "ASPP_up2", [3, 5, 7], depth=64, reuse=reuse)
             #concat2 = tf.concat([upicnv1, aspp_up2], axis=3)
-            upicnv1 = slim.conv2d(upicnv1, 64, [1, 1])
-            skip2 = slim.batch_norm(end_points[args.resnet_model + '/block1'])
+            #upicnv1 = slim.conv2d(upicnv1, 64, [1, 1])
+            skip2 = slim.batch_norm(end_points[args.resnet_model + '/block2'], activation_fn=tf.nn.elu)
             skip2 = slim.conv2d(skip2, 64, [1, 1])
+            skip2 = tf.image.resize_bilinear(skip2, [size[0]//4, size[1]//4])
 
             #xconcat2 = slim.batch_norm(tf.multiply(upicnv1, aspp_up2))
             xconcat2 = tf.concat([upicnv1, aspp_up2, skip2], axis=3)
@@ -255,12 +257,12 @@ def disp_aspp(inputs, args, is_training, reuse, size):
             disp2 = DISP_SCALING*slim.conv2d(xconcat2, 1, [3, 3], activation_fn=tf.sigmoid, normalizer_fn=None, scope='disp2') + MIN_DISP
 
             #upsampe3
-            #xconcat2 = slim.conv2d(concat2, 64, [1, 1], stride=1, scope='xconcat2')
+            xconcat2 = slim.conv2d(xconcat2, 64, [1, 1], stride=1, scope='xconcat2')
             upicnv2 = tf.image.resize_bilinear(xconcat2, [size[0]//2, size[1]//2])
 
-            aspp_up3 = atrous_deep(upicnv2, "ASPP_up3", [3,5,7], depth=32, reuse=reuse)
+            aspp_up3 = atrous_deep(upicnv2, "ASPP_up3", [3,7,11], depth=32, reuse=reuse)
             #concat3 = tf.concat([upicnv2, aspp_up3], axis=3)
-            upicnv2 = slim.conv2d(upicnv2, 32, [1, 1])
+            #upicnv2 = slim.conv2d(upicnv2, 32, [1, 1])
             #xconcat3 = slim.batch_norm(tf.multiply(upicnv2, aspp_up3))
             xconcat3 = tf.concat([upicnv2, aspp_up3], axis=3)
             #block1 = slim.conv2d(end_points[args.resnet_model + '/block1'], 32, [1, 1])
@@ -270,12 +272,12 @@ def disp_aspp(inputs, args, is_training, reuse, size):
             disp3 = DISP_SCALING*slim.conv2d(xconcat3, 1, [3, 3], stride=1, activation_fn=tf.sigmoid, normalizer_fn=None, scope='disp3') + MIN_DISP
 
             #upsample4
-            #xconcat3 = slim.conv2d(concat3, 32, [1, 1], stride=1, scope='xconcat3')
+            xconcat3 = slim.conv2d(xconcat3, 32, [1, 1], stride=1, scope='xconcat3')
             upicnv3 = tf.image.resize_bilinear(xconcat3, [size[0], size[1]])
 
             aspp_up4 = atrous_deep(upicnv3, "ASPP_up4", [3,7,11], depth=16, reuse=reuse)
             #concat4 = tf.concat([upicnv3, aspp_up4], axis=3)
-            upicnv3 = slim.conv2d(upicnv3, 16, [1, 1])
+            #upicnv3 = slim.conv2d(upicnv3, 16, [1, 1])
 
             #xconcat4 = slim.batch_norm(tf.multiply(upicnv3, aspp_up4))
             xconcat4 = tf.concat([upicnv3, aspp_up4], axis=3)
@@ -308,11 +310,13 @@ def disp_aspp_u(inputs, args, is_training, reuse, size):
 
             net_size = tf.shape(net)[1:3]
             # resize the preact features
-            upnet1 = tf.image.resize_bilinear(net, [size[0]//8, size[1]//8])
-            upnet1 = slim.batch_norm(upnet1, activation_fn=tf.nn.elu)
+            #upnet1 = tf.image.resize_bilinear(net, [size[0]//8, size[1]//8])
+            upnet1 = slim.batch_norm(net, activation_fn=tf.nn.elu)
+            upnet1 = slim.conv2d(upnet1, 512, [1, 1])
+            upnet1 = slim.conv2d_transpose(upnet1, 512, [3, 3], stride=2)
             aspp_up1 = atrous_deep(upnet1, "ASPP_up1", depth=256, reuse=reuse)
             #concat1 = tf.concat([upnet1, aspp_up1], axis=3)
-            upnet1 = slim.conv2d(upnet1, 128, [1, 1], activation_fn=None, normalizer_fn=None)
+            upnet1 = slim.conv2d(upnet1, 256, [1, 1])
             #concat1 = slim.batch_norm(tf.multiply(upnet1, aspp_up1))
             concat1 = tf.concat([upnet1, aspp_up1], axis=3)
             #icnv1 = slim.conv2d(concat1, 128, [3,3], scope='icnv1')
@@ -321,48 +325,163 @@ def disp_aspp_u(inputs, args, is_training, reuse, size):
             #icnv1 = slim.conv2d(concat1, 128, [3,3], scope='icnv1')
 
             #upsample2 before bn and activation
-            upnet2 = tf.image.resize_bilinear(concat1, [size[0]//4, size[1]//4])
-            upnet2 = slim.batch_norm(upnet2, activation_fn=tf.nn.elu)
+            #upnet2 = tf.image.resize_bilinear(concat1, [size[0]//4, size[1]//4])
+            #upnet2 = slim.batch_norm(upnet2, activation_fn=tf.nn.elu)
+            upnet2 = slim.conv2d(concat1, 256, [1, 1])
+            upnet2 = slim.conv2d_transpose(upnet2, 256, [3, 3], stride=2)
 
             aspp_up2 = atrous_deep(upnet2, "ASPP_up2", depth=128, reuse=reuse)
-            upnet2 = slim.conv2d(upnet2, 64, [1, 1], activation_fn=None, normalizer_fn=None)
-            skip2 = slim.batch_norm(end_points[args.resnet_model + '/block1'], activation_fn=tf.nn.elu)
-            skip2 = slim.conv2d(skip2, 64, [1, 1], activation_fn=None, normalizer_fn=None)
+            upnet2 = slim.conv2d(upnet2, 64, [1, 1])
+            skip2 = slim.batch_norm(end_points[args.resnet_model + '/block2'], activation_fn=tf.nn.elu)
+            skip2 = slim.conv2d(skip2, 64, [1, 1])
+            skip2 = slim.conv2d_transpose(skip2, 64, [3, 3], stride=2)
 
             #xconcat2 = slim.batch_norm(tf.multiply(upicnv1, aspp_up2))
             xconcat2 = tf.concat([upnet2, aspp_up2, skip2], axis=3)
             #block2 = slim.conv2d(end_points[args.resnet_model + '/block2'], 64, [1,1])
             #for output
-            xconcat2_act = slim.batch_norm(xconcat2, activation_fn=tf.nn.elu)
-            disp2 = DISP_SCALING*slim.conv2d(xconcat2_act, 1, [3, 3], activation_fn=tf.sigmoid, normalizer_fn=None, scope='disp2') + MIN_DISP
+            #xconcat2_act = slim.batch_norm(xconcat2, activation_fn=tf.nn.elu)
+            disp2 = DISP_SCALING*slim.conv2d(xconcat2, 1, [3, 3], activation_fn=tf.sigmoid, normalizer_fn=None, scope='disp2') + MIN_DISP
 
             #upsampe3
-            upnet3 = tf.image.resize_bilinear(xconcat2, [size[0]//2, size[1]//2])
-            upnet3 = slim.batch_norm(upnet3, activation_fn=tf.nn.elu)
+            #upnet3 = tf.image.resize_bilinear(xconcat2, [size[0]//2, size[1]//2])
+            #upnet3 = slim.batch_norm(upnet3, activation_fn=tf.nn.elu)
+            upnet3 = slim.conv2d(xconcat2, 128, [1, 1])
+            upnet3 = slim.conv2d_transpose(upnet3, 128, [3, 3], stride=2)
 
-            aspp_up3 = atrous_deep(upnet3, "ASPP_up3", [3,5,7], depth=64, reuse=reuse)
-            upnet3 = slim.conv2d(upnet3, 32, [1, 1], activation_fn=None, normalizer_fn=None)
-            skip3 = end_points[args.resnet_model+'/root_block']
-            #skip3 = slim.batch_norm(skip3, activation_fn=tf.nn.elu)
-            skip3 = slim.conv2d(skip3, 32, [1, 1], activation_fn=None, normalizer_fn=None)
+            aspp_up3 = atrous_deep(upnet3, "ASPP_up3", [3,7,11], depth=64, reuse=reuse)
+            upnet3 = slim.conv2d(upnet3, 64, [1, 1])
+            skip3 = end_points[args.resnet_model+'/block1']
+            skip3 = slim.batch_norm(skip3, activation_fn=tf.nn.elu)
+            skip3 = slim.conv2d(skip3, 32, [1, 1])
+            skip3 = slim.conv2d_transpose(skip3, 32, [3, 3], stride=2)
             #xconcat3 = slim.batch_norm(tf.multiply(upicnv2, aspp_up3))
             xconcat3 = tf.concat([upnet3, aspp_up3, skip3], axis=3)
             #block1 = slim.conv2d(end_points[args.resnet_model + '/block1'], 32, [1, 1])
 
             #for output
-            xconcat3_act = slim.batch_norm(xconcat3, activation_fn=tf.nn.elu)
-            disp3 = DISP_SCALING*slim.conv2d(xconcat3_act, 1, [3, 3], stride=1, activation_fn=tf.sigmoid, normalizer_fn=None, scope='disp3') + MIN_DISP
+            #xconcat3_act = slim.batch_norm(xconcat3, activation_fn=tf.nn.elu)
+            disp3 = DISP_SCALING*slim.conv2d(xconcat3, 1, [3, 3], stride=1, activation_fn=tf.sigmoid, normalizer_fn=None, scope='disp3') + MIN_DISP
 
             #upsample4
-            upnet4 = tf.image.resize_bilinear(xconcat3, [size[0], size[1]])
-            upnet4 = slim.batch_norm(upnet4, activation_fn=tf.nn.elu)
+            #upnet4 = tf.image.resize_bilinear(xconcat3, [size[0], size[1]])
+            #upnet4 = slim.batch_norm(upnet4, activation_fn=tf.nn.elu)
+            upnet4 = slim.conv2d(xconcat3, 64, [1, 1])
+            upnet4 = slim.conv2d_transpose(upnet4, 64, [3, 3], stride=2)
 
             aspp_up4 = atrous_deep(upnet4, "ASPP_up4", [3,7,11], depth=32, reuse=reuse)
-            upnet4 = slim.conv2d(upnet4, 16, [1, 1], activation_fn=None, normalizer_fn=None)
+            upnet4 = slim.conv2d(upnet4, 32, [1, 1])
+            skip4 = end_points[args.resnet_model+'/root_block']
+            skip4 = slim.batch_norm(skip4, activation_fn=tf.nn.elu)
+            skip4 = slim.conv2d(skip4, 16, [1, 1])
+            skip4 = slim.conv2d_transpose(skip4, 16, [3, 3], stride=2)
 
-            xconcat4 = tf.concat([upnet4, aspp_up4], axis=3)
+            xconcat4 = tf.concat([upnet4, aspp_up4, skip4], axis=3)
 
-            xconcat4 = slim.batch_norm(xconcat4, activation_fn=tf.nn.elu)
+            #xconcat4 = slim.batch_norm(xconcat4, activation_fn=tf.nn.elu)
+
+            #for output
+            disp4  = DISP_SCALING * slim.conv2d(xconcat4, 1,   [3, 3], stride=1,
+                activation_fn=tf.sigmoid, normalizer_fn=None, scope='disp4') + MIN_DISP
+
+            return [disp4, disp3, disp2], end_points
+
+def disp_aspp_u_pose(inputs, args, is_training, reuse, size):
+    out_depth = 256
+    with slim.arg_scope(resnet_utils.resnet_arg_scope(args.l2_regularizer, is_training,
+                                                      args.batch_norm_decay,
+                                                      args.batch_norm_epsilon,
+                                                      activation_fn=tf.nn.elu)):
+        resnet = getattr(resnet_v2, args.resnet_model)
+        args.resnet_model = "resnet_v2_50"
+        _, end_points = resnet(inputs,
+                               is_training=is_training,
+                               global_pool=False,
+                               spatial_squeeze=False,
+                               output_stride=args.output_stride,
+                               reuse=reuse)
+
+        with tf.variable_scope("DeepLab_v3", reuse=reuse):
+            # get block 4 feature outputs
+            net = end_points[args.resnet_model + '/block4']
+            #net = atrous_spatial_pyramid_pooling(net, "ASPP_layer", depth=256, reuse=reuse)
+
+            net_size = tf.shape(net)[1:3]
+            # resize the preact features
+            #upnet1 = tf.image.resize_bilinear(net, [size[0]//8, size[1]//8])
+            upnet1 = slim.batch_norm(net, activation_fn=tf.nn.elu)
+            upnet1 = slim.conv2d(upnet1, 512, [1, 1])
+            upnet1 = slim.conv2d_transpose(upnet1, 512, [3, 3], stride=2)
+            aspp_up1 = atrous_deep(upnet1, "ASPP_up1", depth=256, reuse=reuse)
+            #concat1 = tf.concat([upnet1, aspp_up1], axis=3)
+            upnet1 = slim.conv2d(upnet1, 256, [1, 1])
+
+            skip1 = slim.batch_norm(end_points[args.resnet_model + '/block3'], activation_fn=tf.nn.elu)
+            skip1 = slim.conv2d(skip1, 128, [1, 1])
+            skip1 = slim.conv2d_transpose(skip1, 128, [3, 3], stride=2)
+
+            #concat1 = slim.batch_norm(tf.multiply(upnet1, aspp_up1))
+            concat1 = tf.concat([upnet1, aspp_up1, skip1], axis=3)
+            #icnv1 = slim.conv2d(concat1, 128, [3,3], scope='icnv1')
+            #block3 = slim.conv2d(end_points[args.resnet_model + '/block3'], 128, [1, 1])
+            #icnv1 = tf.concat([concat1, block3], axis=3)
+            #icnv1 = slim.conv2d(concat1, 128, [3,3], scope='icnv1')
+
+            #upsample2 before bn and activation
+            #upnet2 = tf.image.resize_bilinear(concat1, [size[0]//4, size[1]//4])
+            #upnet2 = slim.batch_norm(upnet2, activation_fn=tf.nn.elu)
+            upnet2 = slim.conv2d(concat1, 256, [1, 1])
+            upnet2 = slim.conv2d_transpose(upnet2, 256, [3, 3], stride=2)
+
+            aspp_up2 = atrous_deep(upnet2, "ASPP_up2", depth=128, reuse=reuse)
+            upnet2 = slim.conv2d(upnet2, 128, [1, 1])
+            skip2 = slim.batch_norm(end_points[args.resnet_model + '/block2'], activation_fn=tf.nn.elu)
+            skip2 = slim.conv2d(skip2, 64, [1, 1])
+            skip2 = slim.conv2d_transpose(skip2, 64, [3, 3], stride=2)
+
+            #xconcat2 = slim.batch_norm(tf.multiply(upicnv1, aspp_up2))
+            xconcat2 = tf.concat([upnet2, aspp_up2, skip2], axis=3)
+            #block2 = slim.conv2d(end_points[args.resnet_model + '/block2'], 64, [1,1])
+            #for output
+            #xconcat2_act = slim.batch_norm(xconcat2, activation_fn=tf.nn.elu)
+            disp2 = DISP_SCALING*slim.conv2d(xconcat2, 1, [3, 3], activation_fn=tf.sigmoid, normalizer_fn=None, scope='disp2') + MIN_DISP
+
+            #upsampe3
+            #upnet3 = tf.image.resize_bilinear(xconcat2, [size[0]//2, size[1]//2])
+            #upnet3 = slim.batch_norm(upnet3, activation_fn=tf.nn.elu)
+            upnet3 = slim.conv2d(xconcat2, 128, [1, 1])
+            upnet3 = slim.conv2d_transpose(upnet3, 128, [3, 3], stride=2)
+
+            aspp_up3 = atrous_deep(upnet3, "ASPP_up3", [3,7,11], depth=64, reuse=reuse)
+            upnet3 = slim.conv2d(upnet3, 64, [1, 1])
+            skip3 = end_points[args.resnet_model+'/block1']
+            skip3 = slim.batch_norm(skip3, activation_fn=tf.nn.elu)
+            skip3 = slim.conv2d(skip3, 32, [1, 1])
+            skip3 = slim.conv2d_transpose(skip3, 32, [3, 3], stride=2)
+            #xconcat3 = slim.batch_norm(tf.multiply(upicnv2, aspp_up3))
+            xconcat3 = tf.concat([upnet3, aspp_up3, skip3], axis=3)
+            #block1 = slim.conv2d(end_points[args.resnet_model + '/block1'], 32, [1, 1])
+
+            #for output
+            #xconcat3_act = slim.batch_norm(xconcat3, activation_fn=tf.nn.elu)
+            disp3 = DISP_SCALING*slim.conv2d(xconcat3, 1, [3, 3], stride=1, activation_fn=tf.sigmoid, normalizer_fn=None, scope='disp3') + MIN_DISP
+
+            #upsample4
+            #upnet4 = tf.image.resize_bilinear(xconcat3, [size[0], size[1]])
+            #upnet4 = slim.batch_norm(upnet4, activation_fn=tf.nn.elu)
+            upnet4 = slim.conv2d(xconcat3, 64, [1, 1])
+            upnet4 = slim.conv2d_transpose(upnet4, 64, [3, 3], stride=2)
+
+            aspp_up4 = atrous_deep(upnet4, "ASPP_up4", [3,7,11], depth=32, reuse=reuse)
+            upnet4 = slim.conv2d(upnet4, 32, [1, 1])
+            skip4 = end_points[args.resnet_model+'/root_block']
+            skip4 = slim.batch_norm(skip4, activation_fn=tf.nn.elu)
+            skip4 = slim.conv2d(skip4, 16, [1, 1])
+            skip4 = slim.conv2d_transpose(skip4, 16, [3, 3], stride=2)
+
+            xconcat4 = tf.concat([upnet4, aspp_up4, skip4], axis=3)
+
+            #xconcat4 = slim.batch_norm(xconcat4, activation_fn=tf.nn.elu)
 
             #for output
             disp4  = DISP_SCALING * slim.conv2d(xconcat4, 1,   [3, 3], stride=1,

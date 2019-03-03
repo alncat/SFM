@@ -185,7 +185,7 @@ class DataLoader(object):
             return im, intrinsics
         def random_flipping(im):
             flip = tf.random_uniform([], 0, 1)
-            im = tf.case([(tf.less(flip, 0.5), lambda: tf.reverse(im, axis=1))], default = lambda: im)
+            im = tf.case([(tf.less(flip, 0.5), lambda: tf.reverse(im, axis=[1]))], default = lambda: im)
             #im = tf.image.flip_up_down(im)
             return im
         im, intrinsics = random_scaling(im, intrinsics)

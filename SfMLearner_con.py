@@ -38,8 +38,9 @@ class SfMLearner(object):
 
         #with tf.name_scope("depth_prediction"):
         if not self.use_cspn:
-            pred_disp, depth_net_endpoints = network.disp_aspp(tgt_image,
+            pred_disp, depth_net_endpoints = network.disp_aspp_u(tgt_image,
                                                   args, is_training, reuse, [opt.img_height, opt.img_width])
+            pred_disp = [d/tf.reduce_mean(d, axis=[1,2,3], keep_dims=True) for d in pred_disp]
             pred_depth = [1./d for d in pred_disp]
         else:
             pred_disp, depth_net_endpoints = disp_net_cspn(tgt_image,
@@ -72,10 +73,14 @@ class SfMLearner(object):
                 ref_exp_mask = self.get_reference_explain_mask(s)
             # Scale the source and target images for computing loss at the
             # according scale.
-            curr_tgt_image = tf.image.resize_area(tgt_image,
-                [int(opt.img_height/(2**s)), int(opt.img_width/(2**s))])
-            curr_src_image_stack = tf.image.resize_area(src_image_stack,
-                [int(opt.img_height/(2**s)), int(opt.img_width/(2**s))])
+            #curr_tgt_image = tf.image.resize_area(tgt_image,
+            #    [int(opt.img_height/(2**s)), int(opt.img_width/(2**s))])
+            curr_tgt_image = tgt_image
+            curr_src_image_stack = src_image_stack
+            #curr_src_image_stack = tf.image.resize_area(src_image_stack,
+            #    [int(opt.img_height/(2**s)), int(opt.img_width/(2**s))])
+
+            pred_depth[s] = tf.image.resize_bilinear(pred_depth[s], [opt.img_height, opt.img_width])
 
             if opt.smooth_weight > 0 and not self.use_cspn:
                 smooth_loss += opt.smooth_weight/(2**s) * \
@@ -83,17 +88,18 @@ class SfMLearner(object):
 
             for i in range(opt.num_source):
                 # Inverse warp the source image to the target image frame
+                #concat depth to src image
                 curr_proj_image, proj_mask  = projective_inverse_warp(
                     curr_src_image_stack[:,:,:,3*i:3*(i+1)],
                     #curr_tgt_image,
                     tf.squeeze(pred_depth[s], axis=3),
                     pred_poses[:,i,:],
-                    intrinsics[:,s,:,:])
+                    intrinsics[:,0,:,:])
                 curr_proj_src_image, proj_src_mask = projective_warp(
                     curr_tgt_image,
                     tf.squeeze(pred_depth[s], axis=3),
                     pred_poses[:,i,:],
-                    intrinsics[:,s,:,:])
+                    intrinsics[:,0,:,:])
                 curr_proj_error = proj_mask*tf.abs(curr_proj_image - curr_tgt_image)
                 curr_proj_error += proj_src_mask*tf.abs(curr_proj_src_image - curr_src_image_stack[:,:,:,3*i:3*(i+1)])
                 #curr_proj_error = tf.abs(curr_proj_image - curr_src_image_stack[:,:,:,3*i:3*(i+1)])
@@ -268,7 +274,8 @@ class SfMLearner(object):
                                            name='global_step',
                                            trainable=False)
             learning_rate = tf.train.inverse_time_decay(opt.learning_rate, self.global_step, 25000., 1)
-            optim = tf.train.AdamOptimizer(learning_rate, opt.beta1)
+            #optim = tf.train.AdamOptimizer(learning_rate, opt.beta1)
+            optim = tf.contrib.opt.NadamOptimizer(learning_rate)
             # self.grads_and_vars = optim.compute_gradients(total_loss,
             #                                               var_list=train_vars)
             # self.train_op = optim.apply_gradients(self.grads_and_vars)
@@ -379,7 +386,7 @@ class SfMLearner(object):
                 pred_depth, depth_net_endpoints = disp_net_cspn(
                         input_mc, is_training=False)
             else:
-                pred_disp, depth_net_endpoints = network.disp_aspp(
+                pred_disp, depth_net_endpoints = network.disp_aspp_u(
                     input_mc, args, False, False, [self.img_height, self.img_width])
                 pred_depth = [1./disp for disp in pred_disp]
         pred_depth = pred_depth[0]

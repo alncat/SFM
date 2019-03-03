@@ -135,7 +135,8 @@ def cam2pixel(cam_coords, proj):
   y_n = y_u / (z_u + 1e-10)
   pixel_coords = tf.concat([x_n, y_n], axis=1)
   pixel_coords = tf.reshape(pixel_coords, [batch, 2, height, width])
-  return tf.transpose(pixel_coords, perm=[0, 2, 3, 1])
+  depth = tf.reshape(z_u, [batch, 1, height, width])
+  return tf.transpose(pixel_coords, perm=[0, 2, 3, 1]), tf.transpose(depth, perm=[0, 2, 3, 1])
 
 def meshgrid(batch, height, width, is_homogeneous=True):
   """Construct a 2D meshgrid.
@@ -163,7 +164,7 @@ def meshgrid(batch, height, width, is_homogeneous=True):
   coords = tf.tile(tf.expand_dims(coords, 0), [batch, 1, 1, 1])
   return coords
 
-def projective_warp(img, depth, pose, intrinsics):
+def projective_warp(img, depth, pose, intrinsics, inverse_pose=False):
   """Inverse warp a source image to the target image plane based on projection.
 
   Args:
@@ -179,6 +180,8 @@ def projective_warp(img, depth, pose, intrinsics):
   batch, height, width, _ = img.get_shape().as_list()
   # Convert pose vector to matrix
   pose = pose_vec2mat(pose)
+  if inverse_pose:
+      pose = tf.matrix_inverse(pose)
   # Construct pixel grid coordinates
   pixel_coords = meshgrid(batch, height, width)
   # Convert pixel coordinates to the camera frame
@@ -191,11 +194,11 @@ def projective_warp(img, depth, pose, intrinsics):
   # Get a 4x4 transformation matrix from 'target' camera frame to 'source'
   # pixel frame.
   proj_tgt_cam_to_src_pixel = tf.matmul(intrinsics, pose)
-  src_pixel_coords = cam2pixel(cam_coords, proj_tgt_cam_to_src_pixel)
+  src_pixel_coords, _ = cam2pixel(cam_coords, proj_tgt_cam_to_src_pixel)
   output_img, output_mask = bilinear_project(img, src_pixel_coords)
   return output_img, output_mask
 
-def projective_inverse_warp_naive(img, depth, pose, intrinsics):
+def projective_inverse_warp(img, depth, pose, intrinsics, inverse_pose=False):
   """Inverse warp a source image to the target image plane based on projection.
 
   Args:
@@ -211,6 +214,8 @@ def projective_inverse_warp_naive(img, depth, pose, intrinsics):
   batch, height, width, _ = img.get_shape().as_list()
   # Convert pose vector to matrix
   pose = pose_vec2mat(pose)
+  if inverse_pose:
+      pose = tf.matrix_inverse(pose)
   # Construct pixel grid coordinates
   pixel_coords = meshgrid(batch, height, width)
   # Convert pixel coordinates to the camera frame
@@ -223,94 +228,9 @@ def projective_inverse_warp_naive(img, depth, pose, intrinsics):
   # Get a 4x4 transformation matrix from 'target' camera frame to 'source'
   # pixel frame.
   proj_tgt_cam_to_src_pixel = tf.matmul(intrinsics, pose)
-  src_pixel_coords = cam2pixel(cam_coords, proj_tgt_cam_to_src_pixel)
-  output_img, output_mask = bilinear_sampler_naive(img, src_pixel_coords)
-  return output_img, output_mask
-
-def projective_inverse_warp(img, depth, pose, intrinsics):
-  """Inverse warp a source image to the target image plane based on projection.
-
-  Args:
-    img: the source image [batch, height_s, width_s, 3]
-    depth: depth map of the target image [batch, height_t, width_t]
-    pose: target to source camera transformation matrix [batch, 6], in the
-          order of tx, ty, tz, rx, ry, rz
-    intrinsics: camera intrinsics [batch, 3, 3]
-  Returns:
-    Source image inverse warped to the target image plane [batch, height_t,
-    width_t, 3]
-  """
-  batch, height, width, _ = img.get_shape().as_list()
-  # Convert pose vector to matrix
-  pose = pose_vec2mat(pose)
-  # Construct pixel grid coordinates
-  pixel_coords = meshgrid(batch, height, width)
-  # Convert pixel coordinates to the camera frame
-  cam_coords = pixel2cam(depth, pixel_coords, intrinsics)
-  # Construct a 4x4 intrinsic matrix (TODO: can it be 3x4?)
-  filler = tf.constant([0.0, 0.0, 0.0, 1.0], shape=[1, 1, 4])
-  filler = tf.tile(filler, [batch, 1, 1])
-  intrinsics = tf.concat([intrinsics, tf.zeros([batch, 3, 1])], axis=2)
-  intrinsics = tf.concat([intrinsics, filler], axis=1)
-  # Get a 4x4 transformation matrix from 'target' camera frame to 'source'
-  # pixel frame.
-  proj_tgt_cam_to_src_pixel = tf.matmul(intrinsics, pose)
-  src_pixel_coords = cam2pixel(cam_coords, proj_tgt_cam_to_src_pixel)
+  src_pixel_coords, _ = cam2pixel(cam_coords, proj_tgt_cam_to_src_pixel)
   output_img, output_mask = bilinear_sampler(img, src_pixel_coords)
   return output_img, output_mask
-
-def bilinear_sampler_naive(imgs, coords):
-  """Construct a new image by bilinear sampling from the input image.
-
-  Points falling outside the source image boundary have value 0.
-
-  Args:
-    imgs: source image to be sampled from [batch, height_s, width_s, channels]
-    coords: coordinates of source pixels to sample from [batch, height_t,
-      width_t, 2]. height_t/width_t correspond to the dimensions of the output
-      image (don't need to be the same as height_s/width_s). The two channels
-      correspond to x and y coordinates respectively.
-  Returns:
-    A new sampled image [batch, height_t, width_t, channels]
-  """
-  with tf.name_scope('image_sampling'):
-    coords_x, coords_y = tf.split(coords, [1, 1], axis=3)
-    inp_size = imgs.get_shape()
-    coord_size = coords.get_shape()
-    out_size = coords.get_shape().as_list()
-    out_size[3] = imgs.get_shape().as_list()[3]
-
-    coords_x = tf.cast(coords_x, 'float32')
-    coords_y = tf.cast(coords_y, 'float32')
-
-    x0 = tf.round(coords_x)
-    #x1 = x0 + 1
-    y0 = tf.round(coords_y)
-    #y1 = y0 + 1
-
-    y_max = tf.cast(tf.shape(imgs)[1] - 1, 'float32')
-    x_max = tf.cast(tf.shape(imgs)[2] - 1, 'float32')
-    zero = tf.zeros([1], dtype='float32')
-
-    x0_safe = tf.cast(tf.clip_by_value(x0, zero, x_max), 'int32')
-    y0_safe = tf.cast(tf.clip_by_value(y0, zero, y_max), 'int32')
-    dim2 = inp_size[2]
-    dim1 = inp_size[2]*inp_size[1]
-    base = tf.reshape(tf.range(coord_size[0])*dim1, [out_size[0], 1, 1, 1])
-
-    base_y0 = base + y0_safe * dim2
-    idx00 = x0_safe + base_y0
-    idx00 = tf.reshape(idx00, [out_size[0], out_size[1], out_size[2]])
-
-    ## sample from imgs
-    imgs_flat = tf.reshape(imgs, tf.stack([-1, inp_size[3]]))
-    imgs_flat = tf.cast(imgs_flat, 'float32')
-    output = tf.gather(imgs_flat, idx00)
-
-    mask = 1. - tf.cast(tf.equal(output, 0), 'float32')
-    mask = slim.avg_pool2d(mask, 3, 1, 'SAME')
-
-    return output, mask
 
 def bilinear_sampler(imgs, coords):
   """Construct a new image by bilinear sampling from the input image.
@@ -442,10 +362,10 @@ def bilinear_project(imgs, coords):
     coords_x = tf.cast(coords_x, 'float32')
     coords_y = tf.cast(coords_y, 'float32')
 
-    x0 = tf.round(coords_x)
-    #x1 = x0 + 1
-    y0 = tf.round(coords_y)
-    #y1 = y0 + 1
+    x0 = tf.floor(coords_x)
+    x1 = x0 + 1
+    y0 = tf.floor(coords_y)
+    y1 = y0 + 1
 
     y_max = tf.cast(tf.shape(imgs)[1] - 1, 'float32')
     x_max = tf.cast(tf.shape(imgs)[2] - 1, 'float32')
@@ -453,8 +373,8 @@ def bilinear_project(imgs, coords):
 
     x0_safe = tf.clip_by_value(x0, zero, x_max)
     y0_safe = tf.clip_by_value(y0, zero, y_max)
-    #x1_safe = tf.clip_by_value(x1, zero, x_max)
-    #y1_safe = tf.clip_by_value(y1, zero, y_max)
+    x1_safe = tf.clip_by_value(x1, zero, x_max)
+    y1_safe = tf.clip_by_value(y1, zero, y_max)
 
     ## bilinear interp weights, with points outside the grid having weight 0
     # wt_x0 = (x1 - coords_x) * tf.cast(tf.equal(x0, x0_safe), 'float32')
@@ -462,10 +382,10 @@ def bilinear_project(imgs, coords):
     # wt_y0 = (y1 - coords_y) * tf.cast(tf.equal(y0, y0_safe), 'float32')
     # wt_y1 = (coords_y - y0) * tf.cast(tf.equal(y1, y1_safe), 'float32')
 
-    #wt_x0 = x1_safe - coords_x
-    #wt_x1 = coords_x - x0_safe
-    #wt_y0 = y1_safe - coords_y
-    #wt_y1 = coords_y - y0_safe
+    wt_x1 = x1_safe - coords_x
+    wt_x0 = coords_x - x0_safe
+    wt_y1 = y1_safe - coords_y
+    wt_y0 = coords_y - y0_safe
 
     ## indices in the flat image to sample from
     #dim2 = tf.cast(inp_size[2], 'float32')
@@ -485,21 +405,56 @@ def bilinear_project(imgs, coords):
     #idx11 = x1_safe + base_y1
 
     #get corresponding 4d coords
-    x_flat = tf.reshape(tf.cast(x0_safe, 'int32'), tf.stack([-1, 1]))
-    y_flat = tf.reshape(tf.cast(y0_safe, 'int32'), tf.stack([-1, 1]))
+    x_flat0 = tf.reshape(tf.cast(x0_safe, 'int32'), tf.stack([-1, 1]))
+    x_flat1 = tf.reshape(tf.cast(x1_safe, 'int32'), tf.stack([-1, 1]))
+    y_flat0 = tf.reshape(tf.cast(y0_safe, 'int32'), tf.stack([-1, 1]))
+    y_flat1 = tf.reshape(tf.cast(y1_safe, 'int32'), tf.stack([-1, 1]))
+
     idx_flat = tf.expand_dims(tf.range(inp_size[0]*inp_size[1]*inp_size[2]), axis=1)
-    idx_flat = tf.concat([idx_flat//(inp_size[1]*inp_size[2]), y_flat,
-        x_flat], axis=1)
+    idx_flat = idx_flat//(inp_size[1]*inp_size[2])
+    idx00 = tf.concat([idx_flat, y_flat0, x_flat0], axis=1)
+    idx01 = tf.concat([idx_flat, y_flat1, x_flat0], axis=1)
+    idx10 = tf.concat([idx_flat, y_flat0, x_flat1], axis=1)
+    idx11 = tf.concat([idx_flat, y_flat1, x_flat1], axis=1)
+
+    dist00 = tf.exp(-(wt_x0*wt_x0 + wt_y0*wt_y0)/2)
+    dist01 = tf.exp(-(wt_x0*wt_x0 + wt_y1*wt_y1)/2)
+    dist10 = tf.exp(-(wt_x1*wt_x1 + wt_y0*wt_y0)/2)
+    dist11 = tf.exp(-(wt_x1*wt_x1 + wt_y1*wt_y1)/2)
 
     ## sample from imgs
     imgs_flat = tf.reshape(imgs, tf.stack([-1, inp_size[3]]))
     imgs_flat = tf.cast(imgs_flat, 'float32')
+
+    dist00 = tf.reshape(dist00, tf.stack([-1, 1]))
+    dist01 = tf.reshape(dist01, tf.stack([-1, 1]))
+    dist10 = tf.reshape(dist10, tf.stack([-1, 1]))
+    dist11 = tf.reshape(dist11, tf.stack([-1, 1]))
+
+    im00 = imgs_flat*dist00
+    im01 = imgs_flat*dist01
+    im10 = imgs_flat*dist10
+    im11 = imgs_flat*dist11
+
+    dist00 = tf.scatter_nd(idx00, dist00, [out_size[0], out_size[1], out_size[2], 1])
+    dist01 = tf.scatter_nd(idx01, dist01, [out_size[0], out_size[1], out_size[2], 1])
+    dist10 = tf.scatter_nd(idx10, dist10, [out_size[0], out_size[1], out_size[2], 1])
+    dist11 = tf.scatter_nd(idx11, dist11, [out_size[0], out_size[1], out_size[2], 1])
+
+    dists = dist00 + dist01 + dist10 + dist11 + 1e-5
+
+    im00 = tf.scatter_nd(idx00, im00, out_size)
+    im01 = tf.scatter_nd(idx01, im01, out_size)
+    im10 = tf.scatter_nd(idx10, im10, out_size)
+    im11 = tf.scatter_nd(idx11, im11, out_size)
+
+    output = tf.add_n([im00, im01, im10, im11])/dists
     #im00 = tf.reshape(tf.gather(imgs_flat, tf.cast(idx00, 'int32')), out_size)
     #im01 = tf.reshape(tf.gather(imgs_flat, tf.cast(idx01, 'int32')), out_size)
     #im10 = tf.reshape(tf.gather(imgs_flat, tf.cast(idx10, 'int32')), out_size)
     #im11 = tf.reshape(tf.gather(imgs_flat, tf.cast(idx11, 'int32')), out_size)
 
-    output = tf.scatter_nd(idx_flat, imgs_flat, out_size)
+    #output = tf.scatter_nd(idx_flat, imgs_flat, out_size)
 
     mask = 1 - tf.cast(tf.equal(output, 0), 'float32')
     mask = slim.avg_pool2d(mask, 3, 1, 'SAME')
@@ -567,14 +522,16 @@ def bilinear_conv2d(net, scope_name, kernel_size, in_depth, out_depth, rate, reu
 
 def tf_ssim(img1, img2, cs_map=False, mean_metric=True, size=3, sigma=1.5):
     window = _tf_fspecial_gauss(size, sigma) # window shape [size, size]
-    window = tf.tile(window, [1, 1, 1, 1])
+    window = tf.tile(window, [1, 1, 3, 1])
     K1 = 0.01
     K2 = 0.03
     L = 1  # depth of image (255 in case the image has a differnt scale)
     C1 = (K1*L)**2
     C2 = (K2*L)**2
-    g_img1 = tf.image.rgb_to_grayscale(img1)
-    g_img2 = tf.image.rgb_to_grayscale(img2)
+    #g_img1 = tf.image.rgb_to_grayscale(img1)
+    g_img1 = img1
+    g_img2 = img2
+    #g_img2 = tf.image.rgb_to_grayscale(img2)
     mu1 = tf.nn.depthwise_conv2d(g_img1, window, strides=[1,1,1,1], padding='SAME')
     mu2 = tf.nn.depthwise_conv2d(g_img2, window, strides=[1,1,1,1], padding='SAME')
     mu1_sq = mu1*mu1
