@@ -44,11 +44,11 @@ class SfMLearner(object):
             pred_disp = [d/tf.reduce_mean(d, axis=[1,2,3], keep_dims=True) for d in pred_disp]
             pred_depth = [1./d for d in pred_disp]
         else:
-            pred_disp, depth_net_endpoints = disp_net_cspn(tgt_image,
+            pred_disp, depth_net_endpoints = disp_net(tgt_image,
                                                   is_training=is_training, reuse=reuse)
             pred_disp = [d/tf.reduce_mean(d, axis=[1,2,3], keep_dims=True) for d in pred_disp]
-
-            pred_depth = pred_disp
+            pred_depth = [1./d for d in pred_disp]
+            #pred_depth = pred_disp
 
         #with tf.name_scope("pose_and_explainability_prediction", reuse=reuse):
         pred_poses, pred_exp_logits, pose_exp_net_endpoints = \
@@ -85,7 +85,7 @@ class SfMLearner(object):
             #aspp_up25 = slim.conv2d(aspp_up2, depth, [3, 3], scope="ASPP_up25",rate=5)
             pred_depth[s] = tf.image.resize_bilinear(pred_depth[s], [opt.img_height, opt.img_width])
 
-            if opt.smooth_weight > 0 and not self.use_cspn:
+            if opt.smooth_weight > 0:
                 smooth_loss += opt.smooth_weight/(2**s) * \
                     self.compute_smooth_loss(pred_disp[s])
 

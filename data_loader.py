@@ -1,5 +1,6 @@
 from __future__ import division
 import os
+import math
 import random
 import tensorflow as tf
 
@@ -133,7 +134,8 @@ class DataLoader(object):
         image_all = tf.concat([tgt_image, src_image_stack], axis=3)
         image_all, intrinsics = self.data_augmentation(
             image_all, intrinsics, self.img_height, self.img_width)
-        image_all = tf.image.random_contrast(image_all, 0.3, 1.0)
+        image_all = tf.image.random_contrast(image_all, 0.5, 1.5)
+        #image_all = tf.image.random_saturation(image_all, 0.5, 1.5)
         #image_all = tf.image.random_brightness(image_all, 0.2)
         tgt_image = image_all[:, :, :, :3]
         src_image_stack = image_all[:, :, :, 3:]
@@ -153,12 +155,43 @@ class DataLoader(object):
         return intrinsics
 
     def data_augmentation(self, im, intrinsics, out_h, out_w):
+        # random rotate
+        def random_rotate(im, intrinsics):
+            batch_size, in_h, in_w, _ = im.get_shape().as_list()
+            random_angle = tf.random_uniform([], -0.1, 0.1)
+            rotate_image = tf.contrib.image.rotate(im, random_angle, interpolation='BILINEAR')
+
+            batch_size, rh, rw, _ = tf.unstack(tf.shape(rotate_image))
+            l_x, l_y, lrr_width, lrr_height = self._largest_rotated_rect(in_w, in_h, random_angle, rw, rh)
+            l_x = tf.cast(l_x, dtype=tf.int32)
+            l_y = tf.cast(l_y, dtype=tf.int32)
+            lrr_height = tf.cast(lrr_height, dtype=tf.int32)
+            lrr_width = tf.cast(lrr_width, dtype=tf.int32)
+            im = tf.image.crop_to_bounding_box(rotate_image, l_y, l_x, lrr_height, lrr_width)
+            im = tf.image.resize_bilinear(im, [out_h, out_w])
+            lrr_height = tf.cast(lrr_height, dtype=tf.float32)
+            lrr_width = tf.cast(lrr_width, dtype=tf.float32)
+
+            scale_x = out_w/lrr_width
+            scale_y = out_h/lrr_height
+
+            fx = intrinsics[:,0,0]*scale_x
+            fy = intrinsics[:,1,1]*scale_y
+            cx = (intrinsics[:,0,2] - (in_w/2. - lrr_width/2.))*scale_x
+            cy = (intrinsics[:,1,2] - (in_h/2. - lrr_height/2.))*scale_y
+            #cx = cx * tf.cos(random_angle) + cy * tf.sin(random_angle)
+            #cy = cx * tf.sin(random_angle) + cy * tf.cos(random_angle)
+            intrinsics = self.make_intrinsics_matrix(fx, fy, cx, cy)
+
+            return im, intrinsics
         # Random scaling
         def random_scaling(im, intrinsics):
-            batch_size, in_h, in_w, _ = im.get_shape().as_list()
+            batch_size, in_h, in_w, _ = tf.unstack(tf.shape(im))#im.get_shape().as_list()
             scaling = tf.random_uniform([2], 1, 1.15)
             x_scaling = scaling[0]
             y_scaling = scaling[1]
+            in_h = tf.cast(in_h, dtype=tf.float32)
+            in_w = tf.cast(in_w, dtype=tf.float32)
             out_h = tf.cast(in_h * y_scaling, dtype=tf.int32)
             out_w = tf.cast(in_w * x_scaling, dtype=tf.int32)
             im = tf.image.resize_area(im, [out_h, out_w])
@@ -188,10 +221,38 @@ class DataLoader(object):
             im = tf.case([(tf.less(flip, 0.5), lambda: tf.reverse(im, axis=[1]))], default = lambda: im)
             #im = tf.image.flip_up_down(im)
             return im
-        im, intrinsics = random_scaling(im, intrinsics)
-        im, intrinsics = random_cropping(im, intrinsics, out_h, out_w)
-        im = tf.cast(im, dtype=tf.uint8)
+        def random_swapping(im):
+            flip = tf.random_uniform([], 0, 1)
+            im = tf.case([(tf.less(flip, 0.5), lambda: tf.reverse(im, axis=[2]))], default = lambda: im)
+            #im = tf.image.flip_up_down(im)
+            return im
+        def random_saturation(im):
+            random_colors = tf.random_uniform([3], 0.8, 1.2)
+            white = tf.ones([out_h, out_w])
+            color_image = tf.stack([white*random_colors[i] for i in range(3)], axis=2)
+            color_image = tf.concat([color_image, color_image, color_image], axis=2)
+            im = im * color_image
+            return im
+        def random_brightness(im):
+            random_bright = tf.random_uniform([], 1/1.2, 1/0.8)
+            im = im * random_bright
+            return im
+
+        def random_gamma(im):
+            random_g = tf.random_uniform([], 0.8, 1.2)
+            im = im ** random_g
+            return im
+        #im, intrinsics = random_rotate(im, intrinsics)
+        #im, intrinsics = random_scaling(im, intrinsics)
+        #im, intrinsics = random_cropping(im, intrinsics, out_h, out_w)
+        #im = random_gamma(im)
+        im = tf.image.convert_image_dtype(im, tf.float32)
+        im = random_brightness(im)
+        im = random_saturation(im)
+        im = tf.image.convert_image_dtype(im, tf.uint8, saturate=True)
+        #im = tf.cast(im, dtype=tf.uint8)
         #im = random_flipping(im)
+        im = random_swapping(im)
         return im, intrinsics
 
     def format_file_list(self, data_root, split):
@@ -268,3 +329,27 @@ class DataLoader(object):
                 self.make_intrinsics_matrix(fx, fy, cx, cy))
         intrinsics_mscale = tf.stack(intrinsics_mscale, axis=1)
         return intrinsics_mscale
+    def _largest_rotated_rect(self, w, h, angle, rw, rh):
+        """
+        Given a rectangle of size wxh that has been rotated by 'angle' (in
+        radians), computes the width and height of the largest possible
+        axis-aligned rectangle within the rotated rectangle.
+        Original JS code by 'Andri' and Magnus Hoff from Stack Overflow
+        Converted to Python by Aaron Snoswell
+        Source: http://stackoverflow.com/questions/16702966/rotate-image-and-crop-out-black-borders
+        """
+        angle = tf.abs(angle)
+        w = tf.cast(w, dtype=tf.float32)
+        h = tf.cast(h, dtype=tf.float32)
+        rw = tf.cast(rw, dtype=tf.float32)
+        rh = tf.cast(rh, dtype=tf.float32)
+
+        cos2a = tf.cos(2*angle)
+        bw = (w*tf.cos(angle) - h*tf.sin(angle))/cos2a
+        bh = (h*tf.cos(angle) - w*tf.sin(angle))/cos2a
+        return (
+                (rw - bw)/2,
+                (rh - bh)/2,
+                bw,
+                bh
+                )

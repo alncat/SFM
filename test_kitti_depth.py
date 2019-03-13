@@ -28,7 +28,10 @@ def main(_):
                         img_width=FLAGS.img_width,
                         batch_size=FLAGS.batch_size,
                         mode='depth')
-    saver = tf.train.Saver()
+    self.ema = tf.train.ExponentialMovingAverage(decay=0.9999)
+
+    saver = tf.train.Saver(self.ema.variables_to_restore())
+
     config = tf.ConfigProto()
     config.gpu_options.allow_growth = True
     with tf.Session(config=config) as sess:

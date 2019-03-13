@@ -191,6 +191,7 @@ def stack_blocks_dense(net, blocks, multi_grid, output_stride=None,
           else:
             net = block.unit_fn(net, rate=1, **unit)
             current_stride *= unit.get('stride', 1)
+      #print(current_stride, output_stride)
       net = slim.utils.collect_named_outputs(outputs_collections, sc.name, net)
 
   if output_stride is not None and current_stride != output_stride:

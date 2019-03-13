@@ -500,7 +500,7 @@ def _tf_fspecial_gauss(size, sigma):
     return g / tf.reduce_sum(g)
 
 @slim.add_arg_scope
-def bilinear_conv2d(net, scope_name, kernel_size, in_depth, out_depth, rate, reuse=None, activation_fn=tf.nn.elu):
+def bilinear_conv2d(net, scope_name, kernel_size, in_depth, out_depth, rate, reuse=None, use_bias = True, activation_fn=tf.nn.elu):
     with tf.variable_scope(scope_name, reuse=reuse) as scope:
         upsampled_size = (kernel_size - 1)*(rate - 1) + kernel_size
         kernel = slim.model_variable('weights',
@@ -510,15 +510,13 @@ def bilinear_conv2d(net, scope_name, kernel_size, in_depth, out_depth, rate, reu
         kernel = tf.image.resize_bilinear(kernel, [upsampled_size, upsampled_size])
         kernel = tf.transpose(kernel, perm=[1, 2, 0, 3])
         conv = tf.nn.conv2d(net, kernel, [1, 1, 1, 1], padding='SAME')
-        initial_biases = lambda: tf.constant(0.0, shape=[out_depth], dtype=tf.float32)
-        biases = tf.Variable(initial_value = initial_biases,
-                  trainable=True, name='biases')
-        #biases = slim.model_variable('biases',
-        #
-        #                              initializer = initial_biases)
-        bias = tf.nn.bias_add(conv, biases)
-        conv1 = activation_fn(bias, name=scope_name)
-        return conv1
+        if use_bias:
+            initial_biases = lambda: tf.constant(0.0, shape=[out_depth], dtype=tf.float32)
+            biases = tf.Variable(initial_value = initial_biases,
+                      trainable=True, name='biases')
+            conv = tf.nn.bias_add(conv, biases)
+        #conv1 = activation_fn(bias, name=scope_name)
+        return conv
 
 def tf_ssim(img1, img2, cs_map=False, mean_metric=True, size=3, sigma=1.5):
     window = _tf_fspecial_gauss(size, sigma) # window shape [size, size]

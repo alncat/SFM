@@ -85,7 +85,8 @@ def bottleneck(inputs, depth, depth_bottleneck, stride, rate=1,
     """
     with tf.variable_scope(scope, 'bottleneck_v2', [inputs]) as sc:
         depth_in = slim.utils.last_dimension(inputs.get_shape(), min_rank=4)
-        preact = slim.batch_norm(inputs, activation_fn=tf.nn.relu, scope='preact')
+        #preact = slim.batch_norm(inputs, activation_fn=tf.nn.relu, scope='preact')
+        preact = slim.batch_norm(inputs, activation_fn=tf.nn.elu, scope='preact')
         if depth == depth_in:
             shortcut = resnet_utils.subsample(inputs, stride, 'shortcut')
         else:
@@ -293,11 +294,11 @@ def resnet_v2_50_mod(inputs,
         resnet_v2_block('block1', base_depth=64, num_units=3, stride=2),
         resnet_v2_block('block2', base_depth=128, num_units=4, stride=2),
         resnet_v2_block('block3', base_depth=256, num_units=6, stride=2),
-        #resnet_v2_block('block4', base_depth=512, num_units=3, stride=2),
+        resnet_v2_block('block4', base_depth=512, num_units=3, stride=2),
     ]
     return resnet_v2(inputs, blocks, num_classes, is_training=is_training,
                      global_pool=global_pool, output_stride=output_stride, multi_grid=multi_grid,
-                     include_root_block=False, spatial_squeeze=spatial_squeeze,
+                     include_root_block=True, spatial_squeeze=spatial_squeeze,
                      reuse=reuse, scope=scope)
 
 

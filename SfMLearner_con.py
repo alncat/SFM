@@ -38,7 +38,7 @@ class SfMLearner(object):
 
         #with tf.name_scope("depth_prediction"):
         if not self.use_cspn:
-            pred_disp, depth_net_endpoints = network.disp_aspp_u(tgt_image,
+            pred_disp, depth_net_endpoints = disp_aspp_u_nt(tgt_image,
                                                   args, is_training, reuse, [opt.img_height, opt.img_width])
             pred_disp = [d/tf.reduce_mean(d, axis=[1,2,3], keep_dims=True) for d in pred_disp]
             pred_depth = [1./d for d in pred_disp]
@@ -65,7 +65,7 @@ class SfMLearner(object):
         proj_error_stack_all = []
         proj_src_image_stack_all = []
         exp_mask_stack_all = []
-        alpha = 0.5
+        alpha = 0.15
         for s in range(opt.num_scales):
             if opt.explain_reg_weight > 0:
                 # Construct a reference explainability mask (i.e. all
@@ -263,9 +263,12 @@ class SfMLearner(object):
         #        tgt_image_train, src_image_stack_train, intrinsics_train, is_training=True, reuse=False)
         self.steps_per_epoch = loader.steps_per_epoch
         self.collect_summaries()
+        #using polyak averaging
+        self.ema = tf.train.ExponentialMovingAverage(decay=0.9999)
         with tf.name_scope("parameter_count"):
             parameter_count = tf.reduce_sum([tf.reduce_prod(tf.shape(v)) \
                                             for v in tf.trainable_variables()])
+
 
         #create train op
         with tf.name_scope("train_op"):
@@ -273,15 +276,19 @@ class SfMLearner(object):
             self.global_step = tf.Variable(0,
                                            name='global_step',
                                            trainable=False)
-            learning_rate = tf.train.inverse_time_decay(opt.learning_rate, self.global_step, 25000., 1)
+            #learning_rate = tf.train.inverse_time_decay(opt.learning_rate, self.global_step, 25000., 1)
+            learning_rate = opt.learning_rate
             #optim = tf.train.AdamOptimizer(learning_rate, opt.beta1)
             optim = tf.contrib.opt.NadamOptimizer(learning_rate)
             # self.grads_and_vars = optim.compute_gradients(total_loss,
             #                                               var_list=train_vars)
             # self.train_op = optim.apply_gradients(self.grads_and_vars)
-            self.train_op = slim.learning.create_train_op(total_loss, optim, global_step=self.global_step)
+            self.opt_op = slim.learning.create_train_op(total_loss, optim, global_step=self.global_step)
+            with tf.control_dependencies([self.opt_op]):
+                self.train_op = self.ema.apply(tf.trainable_variables())
             #self.incr_global_step = tf.assign(self.global_step,
             #                                  self.global_step+1)
+        #variables_to_restore = slim.get_variables_to_restore(exclude=[self.ema.average_name(var) for var in tf.trainable_variables()])
 
         #variables_to_restore = slim.get_variables_to_restore(exclude=[args.resnet_model + "/logits", "optimizer_vars",
         #                                                      "DeepLab_v3/ASPP_layer", "DeepLab_v3/logits"] + \
@@ -294,7 +301,16 @@ class SfMLearner(object):
         #self.restorer = tf.train.Saver([var for var in variables_to_restore] ,\
         #                            #[self.global_step],
         #                             max_to_keep=10)
-        self.saver = tf.train.Saver()
+        self.saver = tf.train.Saver(self.ema.variables_to_restore())
+        #variables_to_restore = set(tf.global_variables() + tf.local_variables())
+        #for var in tf.trainable_variables():
+        #    if self.ema.average_name(var) in variables_to_restore:
+        #        variables_to_restore.remove(self.ema.average_name(var))
+        #for var in tf.moving_average_variables():
+        #    if var in variables_to_restore:
+        #        variables_to_restore.remove(var)
+
+        #self.saver = tf.train.Saver()
         sv = tf.train.Supervisor(logdir=opt.checkpoint_dir,
                                  save_summaries_secs=0,
                                  saver=None)
@@ -316,6 +332,7 @@ class SfMLearner(object):
                 print("Resume training from previous checkpoint: %s" % checkpoint)
             #try:
                 self.saver.restore(sess, checkpoint)
+
             #    #self.restorer.restore(sess, "./resnet/checkpoints/" + args.resnet_model + ".ckpt")
             #    self.restorer.restore(sess, "./resnet/checkpoints/model.ckpt")
             #    print("Model checkpoints for " + args.resnet_mode + " restored!")
@@ -413,7 +430,7 @@ class SfMLearner(object):
         # Assuming input image is uint8
         image = tf.image.convert_image_dtype(image, dtype=tf.float32)
         #if is_training:
-        #    image = tf.image.random_brightness(image, 0.1)
+        #    image = tf.image.random_brightness(image, 0.2)
         #    image = tf.clip_by_value(image, 0., 1.)
         return image * 2. -1.
 
@@ -451,6 +468,7 @@ class SfMLearner(object):
     def save(self, sess, checkpoint_dir, step):
         model_name = 'model'
         print(" [*] Saving checkpoint to %s..." % checkpoint_dir)
+        #self.saver = tf.train.Saver(self.ema.variables_to_restore())
         if step == 'latest':
             self.saver.save(sess,
                             os.path.join(checkpoint_dir, model_name + '.latest'))
