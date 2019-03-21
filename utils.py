@@ -518,6 +518,14 @@ def bilinear_conv2d(net, scope_name, kernel_size, in_depth, out_depth, rate, reu
         #conv1 = activation_fn(bias, name=scope_name)
         return conv
 
+def tf_laplacian_loss(img):
+    val = np.array([[0., -1., 0.], [-1., 4., -1.], [0., -1., 0.]])
+    val = np.expand_dims(val, axis=-1)
+    val = np.expand_dims(val, axis=-1)
+    window = tf.constant(val, dtype=tf.float32)
+    img = tf.nn.conv2d(img, window, strides=[1,1,1,1])
+    return tf.reduce_mean(tf.abs(img))
+
 def tf_ssim(img1, img2, cs_map=False, mean_metric=True, size=3, sigma=1.5):
     window = _tf_fspecial_gauss(size, sigma) # window shape [size, size]
     window = tf.tile(window, [1, 1, 3, 1])

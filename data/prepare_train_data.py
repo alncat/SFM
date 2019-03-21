@@ -8,7 +8,7 @@ import os
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--dataset_dir", type=str, required=True, help="where the dataset is stored")
-parser.add_argument("--dataset_name", type=str, required=True, choices=["kitti_raw_eigen", "kitti_raw_stereo", "kitti_odom", "cityscapes"])
+parser.add_argument("--dataset_name", type=str, required=True, choices=["kitti_raw_eigen", "kitti_raw_stereo", "kitti_odom", "cityscapes", "appoloscapes"])
 parser.add_argument("--dump_root", type=str, required=True, help="Where to dump the data")
 parser.add_argument("--seq_length", type=int, required=True, help="Length of each training sequence")
 parser.add_argument("--img_height", type=int, default=128, help="image height")
@@ -39,7 +39,7 @@ def dump_example(n, args):
     dump_dir = os.path.join(args.dump_root, example['folder_name'])
     # if not os.path.isdir(dump_dir):
     #     os.makedirs(dump_dir, exist_ok=True)
-    try: 
+    try:
         os.makedirs(dump_dir)
     except OSError:
         if not os.path.isdir(dump_dir):
@@ -76,7 +76,7 @@ def main():
                                        split='stereo',
                                        img_height=args.img_height,
                                        img_width=args.img_width,
-                                       seq_length=args.seq_length)        
+                                       seq_length=args.seq_length)
 
     if args.dataset_name == 'cityscapes':
         from cityscapes.cityscapes_loader import cityscapes_loader
@@ -85,7 +85,16 @@ def main():
                                         img_width=args.img_width,
                                         seq_length=args.seq_length)
 
+    if args.dataset_name == 'appoloscapes':
+        from appoloscapes.cityscapes_loader import cityscapes_loader
+        data_loader = cityscapes_loader(args.dataset_dir,
+                                        img_height=args.img_height,
+                                        img_width=args.img_width,
+                                        seq_length=args.seq_length)
+
     Parallel(n_jobs=args.num_threads)(delayed(dump_example)(n, args) for n in range(data_loader.num_train))
+    #for n in range(data_loader.num_train):
+    #    dump_example(n, args)
 
     # Split into train/val
     np.random.seed(8964)

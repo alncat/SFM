@@ -38,7 +38,7 @@ class SfMLearner(object):
 
         #with tf.name_scope("depth_prediction"):
         if not self.use_cspn:
-            pred_disp, depth_net_endpoints = disp_aspp_u_nt(tgt_image,
+            pred_disp, depth_net_endpoints = disp_aspp_u_dense(tgt_image,
                                                   args, is_training, reuse, [opt.img_height, opt.img_width])
             pred_disp = [d/tf.reduce_mean(d, axis=[1,2,3], keep_dims=True) for d in pred_disp]
             pred_depth = [1./d for d in pred_disp]
@@ -185,13 +185,16 @@ class SfMLearner(object):
             D_dy = pred[:, 1:, :, :] - pred[:, :-1, :, :]
             D_dx = pred[:, :, 1:, :] - pred[:, :, :-1, :]
             return D_dx, D_dy
+        beta = 0.25
         dx, dy = gradient(pred_disp)
         dx2, dxdy = gradient(dx)
         dydx, dy2 = gradient(dy)
-        return tf.reduce_mean(tf.abs(dx2)) + \
+        gx = tf.reduce_mean(tf.abs(dx)) + tf.reduce_mean(tf.abs(dy))
+        hx  =  tf.reduce_mean(tf.abs(dx2)) + \
                tf.reduce_mean(tf.abs(dxdy)) + \
                tf.reduce_mean(tf.abs(dydx)) + \
                tf.reduce_mean(tf.abs(dy2))
+        return beta*gx + (1-beta)*hx
 
     def collect_summaries(self):
         opt = self.opt
