@@ -95,7 +95,7 @@ def pose_vec2mat(vec):
   transform_mat = tf.concat([transform_mat, filler], axis=1)
   return transform_mat
 
-def pixel2cam(depth, pixel_coords, intrinsics, is_homogeneous=True):
+def pixel2cam(depth, pixel_coords, intrinsics, is_homogeneous=True, add_trans=False, translations=None):
   """Transforms coordinates in the pixel frame to the camera frame.
 
   Args:
@@ -110,6 +110,10 @@ def pixel2cam(depth, pixel_coords, intrinsics, is_homogeneous=True):
   depth = tf.reshape(depth, [batch, 1, -1])
   pixel_coords = tf.reshape(pixel_coords, [batch, 3, -1])
   cam_coords = tf.matmul(tf.matrix_inverse(intrinsics), pixel_coords) * depth
+  if add_trans:
+      translations = tf.transpose(translations, perm=[0,3,1,2])
+      translations = tf.reshape(translations, [batch, 3, -1])
+      cam_coords += translations*cam_coords
   if is_homogeneous:
     ones = tf.ones([batch, 1, height*width])
     cam_coords = tf.concat([cam_coords, ones], axis=1)
@@ -164,7 +168,7 @@ def meshgrid(batch, height, width, is_homogeneous=True):
   coords = tf.tile(tf.expand_dims(coords, 0), [batch, 1, 1, 1])
   return coords
 
-def projective_warp(img, depth, pose, intrinsics, inverse_pose=False):
+def projective_warp(img, depth, pose, intrinsics, inverse_pose=False, add_trans=False, translations=None):
   """Inverse warp a source image to the target image plane based on projection.
 
   Args:
@@ -185,7 +189,7 @@ def projective_warp(img, depth, pose, intrinsics, inverse_pose=False):
   # Construct pixel grid coordinates
   pixel_coords = meshgrid(batch, height, width)
   # Convert pixel coordinates to the camera frame
-  cam_coords = pixel2cam(depth, pixel_coords, intrinsics)
+  cam_coords = pixel2cam(depth, pixel_coords, intrinsics, add_trans=add_trans, translations=translations)
   # Construct a 4x4 intrinsic matrix (TODO: can it be 3x4?)
   filler = tf.constant([0.0, 0.0, 0.0, 1.0], shape=[1, 1, 4])
   filler = tf.tile(filler, [batch, 1, 1])
@@ -198,7 +202,7 @@ def projective_warp(img, depth, pose, intrinsics, inverse_pose=False):
   output_img, output_mask = bilinear_project(img, src_pixel_coords)
   return output_img, output_mask
 
-def projective_inverse_warp(img, depth, pose, intrinsics, inverse_pose=False):
+def projective_inverse_warp(img, depth, pose, intrinsics, inverse_pose=False, add_trans=False, translations=None):
   """Inverse warp a source image to the target image plane based on projection.
 
   Args:
@@ -219,7 +223,7 @@ def projective_inverse_warp(img, depth, pose, intrinsics, inverse_pose=False):
   # Construct pixel grid coordinates
   pixel_coords = meshgrid(batch, height, width)
   # Convert pixel coordinates to the camera frame
-  cam_coords = pixel2cam(depth, pixel_coords, intrinsics)
+  cam_coords = pixel2cam(depth, pixel_coords, intrinsics, add_trans=add_trans, translations=translations)
   # Construct a 4x4 intrinsic matrix (TODO: can it be 3x4?)
   filler = tf.constant([0.0, 0.0, 0.0, 1.0], shape=[1, 1, 4])
   filler = tf.tile(filler, [batch, 1, 1])

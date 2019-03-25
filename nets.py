@@ -18,6 +18,168 @@ def resize_like(inputs, ref):
         return inputs
     return tf.image.resize_nearest_neighbor(inputs, [rH.value, rW.value])
 
+def pose_trans_net(tgt_image, src_image_stack, do_trans=True, is_training=True, reuse=False):
+    inputs = tf.concat([tgt_image, src_image_stack], axis=3)
+    H = inputs.get_shape()[1].value
+    W = inputs.get_shape()[2].value
+    num_source = int(src_image_stack.get_shape()[3].value//3)
+    with tf.variable_scope('pose_exp_net', reuse=reuse) as sc:
+        end_points_collection = sc.original_name_scope + '_end_points'
+        with slim.arg_scope([slim.conv2d, slim.conv2d_transpose],
+                            normalizer_fn=None,
+                            weights_regularizer=slim.l2_regularizer(0.05),
+                            activation_fn=tf.nn.relu,
+                            outputs_collections=end_points_collection):
+            # cnv1 to cnv5b are shared between pose and explainability prediction
+            cnv1  = slim.conv2d(inputs,16,  [7, 7], stride=2, scope='cnv1')
+            cnv2  = slim.conv2d(cnv1, 32,  [5, 5], stride=2, scope='cnv2')
+            cnv3  = slim.conv2d(cnv2, 64,  [3, 3], stride=2, scope='cnv3')
+            cnv4  = slim.conv2d(cnv3, 128, [3, 3], stride=2, scope='cnv4')
+            cnv5  = slim.conv2d(cnv4, 256, [3, 3], stride=2, scope='cnv5')
+            # Pose specific layers
+            with tf.variable_scope('pose', reuse=reuse):
+                cnv6  = slim.conv2d(cnv5, 256, [3, 3], stride=2, scope='cnv6')
+                cnv7  = slim.conv2d(cnv6, 256, [3, 3], stride=2, scope='cnv7')
+                pose_pred = slim.conv2d(cnv7, 6*num_source, [1, 1], scope='pred',
+                    stride=1, normalizer_fn=None, activation_fn=None)
+                pose_avg = tf.reduce_mean(pose_pred, [1, 2])
+                # Empirically we found that scaling by a small constant
+                # facilitates training.
+                pose_final = 0.01 * tf.reshape(pose_avg, [-1, num_source, 6])
+            # Exp mask specific layers
+            if do_trans:
+                with tf.variable_scope('trans', reuse=reuse):
+                    upcnv5 = slim.conv2d_transpose(cnv5, 256, [3, 3], stride=2, scope='upcnv5')
+
+                    upcnv4 = slim.conv2d_transpose(upcnv5, 128, [3, 3], stride=2, scope='upcnv4')
+
+                    upcnv3 = slim.conv2d_transpose(upcnv4, 64,  [3, 3], stride=2, scope='upcnv3')
+                    mask3 = 0.001*slim.conv2d(upcnv3, num_source, [3, 3], stride=1, scope='mask3',
+                        normalizer_fn=None, activation_fn=None)
+
+                    upcnv2 = slim.conv2d_transpose(upcnv3, 32,  [5, 5], stride=2, scope='upcnv2')
+                    mask2 = 0.001*slim.conv2d(upcnv2, num_source, [5, 5], stride=1, scope='mask2',
+                        normalizer_fn=None, activation_fn=None)
+
+                    upcnv1 = slim.conv2d_transpose(upcnv2, 16,  [7, 7], stride=2, scope='upcnv1')
+                    mask1 = 0.001*slim.conv2d(upcnv1, num_source, [7, 7], stride=1, scope='mask1',
+                        normalizer_fn=None, activation_fn=None)
+            else:
+                mask1 = None
+                mask2 = None
+                mask3 = None
+                mask4 = None
+            end_points = utils.convert_collection_to_dict(end_points_collection)
+            return pose_final, [mask1, mask2, mask3], end_points
+
+def pose_trans_u_net(tgt_image, src_image_stack, do_trans=True, is_training=True, reuse=False):
+    inputs = tf.concat([tgt_image, src_image_stack], axis=3)
+    H = inputs.get_shape()[1].value
+    W = inputs.get_shape()[2].value
+    num_source = int(src_image_stack.get_shape()[3].value//3)
+    with tf.variable_scope('pose_exp_net', reuse=reuse) as sc:
+        end_points_collection = sc.original_name_scope + '_end_points'
+        with slim.arg_scope([slim.conv2d, slim.conv2d_transpose],
+                            normalizer_fn=None,
+                            weights_regularizer=slim.l2_regularizer(0.05),
+                            activation_fn=tf.nn.relu,
+                            outputs_collections=end_points_collection):
+            # cnv1 to cnv5b are shared between pose and explainability prediction
+            cnv1  = slim.conv2d(inputs,16,  [7, 7], stride=2, scope='cnv1')
+            cnv2  = slim.conv2d(cnv1, 32,  [5, 5], stride=2, scope='cnv2')
+            cnv3  = slim.conv2d(cnv2, 64,  [3, 3], stride=2, scope='cnv3')
+            cnv4  = slim.conv2d(cnv3, 128, [3, 3], stride=2, scope='cnv4')
+            cnv5  = slim.conv2d(cnv4, 256, [3, 3], stride=2, scope='cnv5')
+            # Pose specific layers
+            with tf.variable_scope('pose', reuse=reuse):
+                cnv6  = slim.conv2d(cnv5, 256, [3, 3], stride=2, scope='cnv6')
+                cnv7  = slim.conv2d(cnv6, 256, [3, 3], stride=2, scope='cnv7')
+                pose_pred = slim.conv2d(cnv7, 6*num_source, [1, 1], scope='pred',
+                    stride=1, normalizer_fn=None, activation_fn=None)
+                pose_avg = tf.reduce_mean(pose_pred, [1, 2])
+                # Empirically we found that scaling by a small constant
+                # facilitates training.
+                pose_final = 0.01 * tf.reshape(pose_avg, [-1, num_source, 6])
+            # Exp mask specific layers
+            if do_trans:
+                with tf.variable_scope('trans', reuse=reuse):
+                    upcnv5 = slim.conv2d_transpose(cnv5, 256, [3, 3], stride=2, scope='upcnv5')
+
+                    upcnv4 = slim.conv2d_transpose(upcnv5, 128, [3, 3], stride=2, scope='upcnv4')
+
+                    upcnv3 = slim.conv2d_transpose(upcnv4, 64,  [3, 3], stride=2, scope='upcnv3')
+                    mask3 = 0.2*slim.conv2d(upcnv3, 3*num_source, [3, 3], stride=1, scope='mask3',
+                        normalizer_fn=None, activation_fn=tf.tanh)
+
+                    upcnv2 = slim.conv2d_transpose(upcnv3, 32,  [5, 5], stride=2, scope='upcnv2')
+                    mask2 = 0.2*slim.conv2d(upcnv2, 3*num_source, [5, 5], stride=1, scope='mask2',
+                        normalizer_fn=None, activation_fn=tf.tanh)
+
+                    upcnv1 = slim.conv2d_transpose(upcnv2, 16,  [7, 7], stride=2, scope='upcnv1')
+                    mask1 = 0.2*slim.conv2d(upcnv1, 3*num_source, [7, 7], stride=1, scope='mask1',
+                        normalizer_fn=None, activation_fn=tf.tanh)
+            else:
+                mask1 = None
+                mask2 = None
+                mask3 = None
+                mask4 = None
+            end_points = utils.convert_collection_to_dict(end_points_collection)
+            return pose_final, [mask1, mask2, mask3], end_points
+
+def pose_exp_u_net(tgt_image, src_image_stack, do_trans=True, is_training=True, reuse=False):
+    inputs = tf.concat([tgt_image, src_image_stack], axis=3)
+    H = inputs.get_shape()[1].value
+    W = inputs.get_shape()[2].value
+    num_source = int(src_image_stack.get_shape()[3].value//3)
+    with tf.variable_scope('pose_exp_net', reuse=reuse) as sc:
+        end_points_collection = sc.original_name_scope + '_end_points'
+        with slim.arg_scope([slim.conv2d, slim.conv2d_transpose],
+                            normalizer_fn=None,
+                            weights_regularizer=slim.l2_regularizer(0.05),
+                            activation_fn=tf.nn.relu,
+                            outputs_collections=end_points_collection):
+            # cnv1 to cnv5b are shared between pose and explainability prediction
+            cnv1  = slim.conv2d(inputs,16,  [7, 7], stride=2, scope='cnv1')
+            cnv2  = slim.conv2d(cnv1, 32,  [5, 5], stride=2, scope='cnv2')
+            cnv3  = slim.conv2d(cnv2, 64,  [3, 3], stride=2, scope='cnv3')
+            cnv4  = slim.conv2d(cnv3, 128, [3, 3], stride=2, scope='cnv4')
+            cnv5  = slim.conv2d(cnv4, 256, [3, 3], stride=2, scope='cnv5')
+            # Pose specific layers
+            with tf.variable_scope('pose', reuse=reuse):
+                cnv6  = slim.conv2d(cnv5, 256, [3, 3], stride=2, scope='cnv6')
+                cnv7  = slim.conv2d(cnv6, 256, [3, 3], stride=2, scope='cnv7')
+                pose_pred = slim.conv2d(cnv7, 6*num_source, [1, 1], scope='pred',
+                    stride=1, normalizer_fn=None, activation_fn=None)
+                pose_avg = tf.reduce_mean(pose_pred, [1, 2])
+                # Empirically we found that scaling by a small constant
+                # facilitates training.
+                pose_final = 0.01 * tf.reshape(pose_avg, [-1, num_source, 6])
+            # Exp mask specific layers
+            if do_trans:
+                with tf.variable_scope('trans', reuse=reuse):
+                    upcnv5 = slim.conv2d_transpose(cnv5, 256, [3, 3], stride=2, scope='upcnv5')
+
+                    upcnv4 = slim.conv2d_transpose(tf.concat([upcnv5, cnv4], axis=3), 128, [3, 3], stride=2, scope='upcnv4')
+
+                    upcnv3 = slim.conv2d_transpose(tf.concat([upcnv4, cnv3], axis=3), 64,  [3, 3], stride=2, scope='upcnv3')
+                    mask3 = 0.2*slim.conv2d(upcnv3, 3*num_source, [3, 3], stride=1, scope='mask3',
+                        normalizer_fn=None, activation_fn=tf.tanh)
+
+                    upcnv2 = slim.conv2d_transpose(tf.concat([upcnv3,  cnv2], axis=3), 32,  [5, 5], stride=2, scope='upcnv2')
+                    mask2 = 0.2*slim.conv2d(upcnv2, 3*num_source, [5, 5], stride=1, scope='mask2',
+                        normalizer_fn=None, activation_fn=tf.tanh)
+
+                    upcnv1 = slim.conv2d_transpose(tf.concat([upcnv2, cnv1], axis=3), 16,  [7, 7], stride=2, scope='upcnv1')
+                    mask1 = 0.2*slim.conv2d(upcnv1, 3*num_source, [7, 7], stride=1, scope='mask1',
+                        normalizer_fn=None, activation_fn=tf.tanh)
+            else:
+                mask1 = None
+                mask2 = None
+                mask3 = None
+                mask4 = None
+            end_points = utils.convert_collection_to_dict(end_points_collection)
+            return pose_final, [mask1, mask2, mask3], end_points
+
 def pose_exp_net(tgt_image, src_image_stack, do_exp=True, is_training=True, reuse=False):
     inputs = tf.concat([tgt_image, src_image_stack], axis=3)
     H = inputs.get_shape()[1].value
@@ -312,9 +474,9 @@ def disp_bottleneck_dd(end_points, skip2, concat, scope, skip_block, in_channels
     with tf.variable_scope(scope, reuse=reuse):
         iH, iW = concat.get_shape()[1], concat.get_shape()[2]
         if use_skip2:
-            skip2 = slim.conv2d(skip2, in_channels, [1, 1], activation_fn=None)
-            skip2 = tf.image.resize_bilinear(skip2, [iH, iW])
-            concat = tf.concat([concat, skip2], axis=3)
+            skip2 = slim.batch_norm(end_points[skip2], activation_fn=tf.nn.elu)
+            skip2 = slim.conv2d(skip2, out_channels, [1, 1])
+            skip2 = tf.image.resize_bilinear(skip2, [iH*2, iW*2])
         upnet = tf.image.resize_bilinear(concat, [iH*2, iW*2])
         if use_skip2:
             upnet = slim.conv2d(upnet, in_channels, [1, 1], activation_fn=None)
@@ -327,6 +489,8 @@ def disp_bottleneck_dd(end_points, skip2, concat, scope, skip_block, in_channels
         else:
             skip = slim.conv2d(tf.concat([aspp_up, aspp_up2], axis=3), out_channels, [3, 3], rate=rates[1]*2)
         xconcat = tf.concat([supnet, aspp_up, aspp_up2, skip], axis=3)
+        if use_skip2:
+            xconcat = tf.concat([xconcat, skip2], axis=3)
         xconcat = slim.conv2d(xconcat, out_channels, [1, 1], activation_fn=None)
         return xconcat
 
@@ -530,15 +694,15 @@ def disp_aspp_u_dd(inputs, args, is_training, reuse, size, custom_getter=None):
                 upnet = slim.conv2d(upnet, 1024, [1, 1], activation_fn=None)
                 #upnet1 = slim.batch_norm(net, activation_fn=tf.nn.elu)
                 concat = disp_bottleneck_dd(end_points, None, upnet, "concat", args.resnet_model+"/block3", 1024, 512, reuse=reuse, use_skip2=False)
-                concat1 = disp_bottleneck_dd(end_points, None, concat, "concat1", args.resnet_model+"/block2", 512, 256, reuse=reuse, use_skip2=False)
-                xconcat2 = disp_bottleneck_dd(end_points, concat, concat1, "concat2", args.resnet_model+"/block1", 256, 128, reuse=reuse)
+                concat1 = disp_bottleneck_dd(end_points, args.resnet_model+'/block3', concat, "concat1", args.resnet_model+"/block2", 512, 256, reuse=reuse, use_skip2=True)
+                xconcat2 = disp_bottleneck_dd(end_points, args.resnet_model+'/block2', concat1, "concat2", args.resnet_model+"/block1", 256, 128, reuse=reuse)
                 disp2 = DISP_SCALING*slim.conv2d(xconcat2, 1, [3, 3], activation_fn=tf.sigmoid, normalizer_fn=None, scope='disp2') + MIN_DISP
                 #upsampe3
-                xconcat3 = disp_bottleneck_dd(end_points, concat1, xconcat2, "concat3", args.resnet_model+"/root_block", 128, 64, reuse=reuse, rates=[3,6])
+                xconcat3 = disp_bottleneck_dd(end_points, args.resnet_model+'/block2', xconcat2, "concat3", args.resnet_model+"/root_block", 128, 64, reuse=reuse, rates=[3,6])
                 #for output
                 disp3 = DISP_SCALING*slim.conv2d(xconcat3, 1, [3, 3], stride=1, activation_fn=tf.sigmoid, normalizer_fn=None, scope='disp3') + MIN_DISP
                 #upsample4
-                xconcat4 = disp_bottleneck_dd(end_points, xconcat2, xconcat3, "concat4", args.resnet_model+"/root_block", 64, 32, reuse=reuse, rates=[3,6], use_skip=False)
+                xconcat4 = disp_bottleneck_dd(end_points, args.resnet_model+"/root_block", xconcat3, "concat4", args.resnet_model+"/root_block", 64, 32, reuse=reuse, rates=[3,6], use_skip=False)
                 #for output
                 disp4  = DISP_SCALING * slim.conv2d(xconcat4, 1,   [3, 3], stride=1,
                     activation_fn=tf.sigmoid, normalizer_fn=None, scope='disp4') + MIN_DISP

@@ -283,6 +283,10 @@ class DataLoader(object):
         src_image_2 = tf.slice(image_seq,
                                [0, int(tgt_start_idx + img_width), 0],
                                [-1, int(img_width * (num_source//2)), -1])
+
+        #flip = tf.random_uniform([], 0, 1)
+        #src_image_seq = tf.case([(tf.less(flip, 0.5), lambda: tf.concat([src_image_1, src_image_2], axis=1))], default = lambda: tf.concat([src_image_2, src_image_1], axis=1))
+
         src_image_seq = tf.concat([src_image_1, src_image_2], axis=1)
         # Stack source frames along the color channels (i.e. [H, W, N*3])
         src_image_stack = tf.concat([tf.slice(src_image_seq,

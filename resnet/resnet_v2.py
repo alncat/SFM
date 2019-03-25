@@ -119,7 +119,8 @@ def resnet_v2(inputs,
               include_root_block=True,
               spatial_squeeze=True,
               reuse=None,
-              scope=None):
+              scope=None,
+              outputs_collections_name=None):
     """Generator for v2 (preactivation) ResNet models.
 
     This function generates a family of ResNet v2 models. See the resnet_v2_*()
@@ -183,7 +184,10 @@ def resnet_v2(inputs,
       ValueError: If the target output_stride is not valid.
     """
     with tf.variable_scope(scope, 'resnet_v2', [inputs], reuse=reuse) as sc:
-        end_points_collection = sc.original_name_scope + '_end_points'
+        if outputs_collections_name:
+            end_points_collection = outputs_collections_name + '_end_points'
+        else:
+            end_points_collection = sc.original_name_scope + '_end_points'
         with slim.arg_scope([slim.conv2d, bottleneck,
                              resnet_utils.stack_blocks_dense],
                             outputs_collections=end_points_collection):
@@ -301,6 +305,27 @@ def resnet_v2_50_mod(inputs,
                      include_root_block=True, spatial_squeeze=spatial_squeeze,
                      reuse=reuse, scope=scope)
 
+def resnet_v2_50_slim(inputs,
+                 num_classes=None,
+                 is_training=True,
+                 multi_grid=[1, 2, 4],
+                 global_pool=True,
+                 output_stride=None,
+                 spatial_squeeze=True,
+                 reuse=None,
+                 scope='resnet_v2_50',
+                 outputs_collections_name=None):
+    """ResNet-50 model of [1]. See resnet_v2() for arg and return description."""
+    blocks = [
+        resnet_v2_block('block1', base_depth=64, num_units=2, stride=2),
+        resnet_v2_block('block2', base_depth=128, num_units=3, stride=2),
+        resnet_v2_block('block3', base_depth=256, num_units=3, stride=2),
+        resnet_v2_block('block4', base_depth=512, num_units=2, stride=2),
+    ]
+    return resnet_v2(inputs, blocks, num_classes, is_training=is_training,
+                     global_pool=global_pool, output_stride=output_stride, multi_grid=multi_grid,
+                     include_root_block=False, spatial_squeeze=spatial_squeeze,
+                     reuse=reuse, scope=scope, outputs_collections_name=outputs_collections_name)
 
 def resnet_v2_101(inputs,
                   num_classes=None,

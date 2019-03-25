@@ -204,7 +204,7 @@ class SfMLearner(object):
         tf.summary.scalar("exp_loss", self.exp_loss)
         for s in range(1):
             tf.summary.histogram("scale%d_depth" % s, self.pred_depth[s])
-            tf.summary.image('scale%d_depth_image' % s, self.pred_depth[s])
+            tf.summary.image('scale%d_depth_image' % s, 1./self.pred_depth[s])
             tf.summary.image('scale%d_target_image' % s, \
                              self.deprocess_image(self.tgt_image_all[s]))
             for i in range(opt.num_source):
@@ -396,7 +396,7 @@ class SfMLearner(object):
                 if step % opt.save_latest_freq == 0:
                     self.save(sess, opt.checkpoint_dir, 'latest')
 
-                if step % self.steps_per_epoch == 0:
+                if step % (self.steps_per_epoch//3) == 0:
                     self.save(sess, opt.checkpoint_dir, gs)
 
     def build_depth_test_graph(self):

@@ -6,7 +6,7 @@ import numpy as np
 import tensorflow as tf
 import tensorflow.contrib.slim as slim
 from data_loader import DataLoader
-from nets import *
+from nn_nets import *
 import network
 from utils import *
 
@@ -27,34 +27,21 @@ class SfMLearner(object):
 
     def build_train_graph(self, tgt_image, src_image_stack, intrinsics, is_training = True, reuse=False):
         opt = self.opt
-        #with tf.name_scope("data_loading", reuse=reuse):
-            #if is_training:
-            #    tgt_image, src_image_stack, intrinsics = loader.load_train_batch()
-            #else:
-            #    tgt_image, src_image_stack, intrinsics = loader.load_val_batch()
-            #tgt_image, src_image_stack, intrinsics = loader()
-        tgt_image = self.preprocess_image(tgt_image)
-        src_image_stack = self.preprocess_image(src_image_stack)
+        tgt_image = self.preprocess_image(tgt_image, is_training)
+        src_image_stack = self.preprocess_image(src_image_stack, is_training)
 
-        #with tf.name_scope("depth_prediction"):
-        if not self.use_cspn:
-            pred_disp, depth_net_endpoints = network.disp_aspp(tgt_image,
+        pred_disp, depth_net_endpoints = disp_aspp_u_uni(tgt_image,
                                                   args, is_training, reuse, [opt.img_height, opt.img_width])
-            pred_depth = [1./d for d in pred_disp]
-        else:
-            pred_disp, depth_net_endpoints = disp_net_cspn(tgt_image,
-                                                  is_training=is_training)
-            pred_depth = pred_disp
+        pred_disp = [d/tf.reduce_mean(d, axis=[1,2,3], keep_dims=True) for d in pred_disp]
+        pred_depth = [1./d for d in pred_disp]
 
-        #with tf.name_scope("pose_and_explainability_prediction", reuse=reuse):
         pred_poses, pred_exp_logits, pose_exp_net_endpoints = \
-                pose_exp_net(tgt_image,
+                pose_exp_u_resnet(tgt_image,
                              src_image_stack,
-                             do_exp=(opt.explain_reg_weight > 0),
+                             do_trans=(opt.explain_reg_weight > 0),
                              is_training=is_training,
                              reuse = reuse)
 
-        #with tf.name_scope("compute_loss", reuse=reuse):
         pixel_loss = 0
         exp_loss = 0
         smooth_loss = 0
@@ -62,69 +49,82 @@ class SfMLearner(object):
         src_image_stack_all = []
         proj_image_stack_all = []
         proj_error_stack_all = []
+        proj_src_image_stack_all = []
         exp_mask_stack_all = []
-        alpha = 0.85
+        alpha = 0.15
         for s in range(opt.num_scales):
-            if opt.explain_reg_weight > 0:
-                # Construct a reference explainability mask (i.e. all
-                # pixels are explainable)
-                ref_exp_mask = self.get_reference_explain_mask(s)
             # Scale the source and target images for computing loss at the
             # according scale.
-            curr_tgt_image = tf.image.resize_area(tgt_image,
-                [int(opt.img_height/(2**s)), int(opt.img_width/(2**s))])
-            curr_src_image_stack = tf.image.resize_area(src_image_stack,
-                [int(opt.img_height/(2**s)), int(opt.img_width/(2**s))])
+            curr_tgt_image = tgt_image
+            curr_src_image_stack = src_image_stack
 
-            #if opt.smooth_weight > 0 and not self.use_cspn:
-            #    smooth_loss += opt.smooth_weight/(2**s) * \
-            #        self.compute_smooth_loss(pred_disp[s])
+            pred_depth_s = tf.image.resize_bilinear(pred_depth[s], [opt.img_height, opt.img_width])
+
+            if opt.smooth_weight > 0:
+                smooth_loss += opt.smooth_weight/(2**s) * \
+                    self.compute_smooth_loss(pred_disp[s])
+                if opt.explain_reg_weight > 0:
+                    #remove global translation
+                    smooth_loss += opt.explain_reg_weight/(2**s) * \
+                        (self.compute_smooth_loss(pred_exp_logits[s]) + \
+                        tf.reduce_mean(tf.abs(pred_exp_logits[s])))
+
 
             for i in range(opt.num_source):
                 # Inverse warp the source image to the target image frame
-                curr_proj_image = projective_inverse_warp(
-                    curr_src_image_stack[:,:,:,3*i:3*(i+1)],
-                    #curr_tgt_image,
-                    tf.squeeze(pred_depth[s], axis=3),
-                    pred_poses[:,i,:],
-                    intrinsics[:,s,:,:])
-                curr_proj_error = tf.abs(curr_proj_image - curr_tgt_image)
-                #curr_proj_error = tf.abs(curr_proj_image - curr_src_image_stack[:,:,:,3*i:3*(i+1)])
-                #curr_ssim_error = 1. - tf_ssim(curr_proj_image, curr_tgt_image, mean_metric=False)
-                #curr_proj_error = 0.5 * alpha * curr_ssim_error + 0.15*curr_proj_error
-                # Cross-entropy loss as regularization for the
-                # explainability prediction
+                #concat depth to src image
                 if opt.explain_reg_weight > 0:
                     curr_exp_logits = tf.slice(pred_exp_logits[s],
-                                               [0, 0, 0, i*2],
-                                               [-1, -1, -1, 2])
-                    exp_loss += opt.explain_reg_weight * \
-                        self.compute_exp_reg_loss(curr_exp_logits,
-                                                  ref_exp_mask)
-                    curr_exp = tf.nn.softmax(curr_exp_logits)
+                                                [0, 0, 0, i*3],
+                                                [-1, -1, -1, 3])
+                    curr_exp_logits = tf.image.resize_bilinear(curr_exp_logits, [opt.img_height, opt.img_width])
+
+                curr_proj_image, proj_mask  = projective_inverse_warp(
+                    curr_src_image_stack[:,:,:,3*i:3*(i+1)],
+                    #curr_tgt_image,
+                    tf.squeeze(pred_depth_s, axis=3),
+                    pred_poses[:,i,:],
+                    intrinsics[:,0,:,:],
+                    add_trans=True,
+                    translations=curr_exp_logits)
+                curr_proj_src_image, proj_src_mask = projective_warp(
+                    curr_tgt_image,
+                    tf.squeeze(pred_depth_s, axis=3),
+                    pred_poses[:,i,:],
+                    intrinsics[:,0,:,:],
+                    add_trans=True,
+                    translations=curr_exp_logits)
+                curr_proj_error = proj_mask*tf.abs(curr_proj_image - curr_tgt_image)
+                curr_proj_error += proj_src_mask*tf.abs(curr_proj_src_image - curr_src_image_stack[:,:,:,3*i:3*(i+1)])
+                #curr_proj_error = tf.abs(curr_proj_image - curr_src_image_stack[:,:,:,3*i:3*(i+1)])
+                curr_ssim_error = proj_mask*tf_ssim(curr_proj_image, curr_tgt_image, mean_metric=False)
+                curr_ssim_error += proj_src_mask*tf_ssim(curr_proj_src_image, curr_src_image_stack[:,:,:,3*i:3*(i+1)])
+                # Cross-entropy loss as regularization for the
+                # explainability prediction
+
                 # Photo-consistency loss weighted by explainability
-                if opt.explain_reg_weight > 0:
-                    pixel_loss += tf.reduce_mean(curr_proj_error * \
-                        tf.expand_dims(curr_exp[:,:,:,1], -1))
-                else:
-                    pixel_loss += tf.reduce_mean(curr_proj_error)
+                pixel_loss += alpha*tf.reduce_mean(curr_proj_error) + (1-alpha)*tf.reduce_mean(curr_ssim_error)
                 # Prepare images for tensorboard summaries
                 if i == 0:
                     proj_image_stack = curr_proj_image
+                    proj_src_image_stack = curr_proj_src_image
                     proj_error_stack = curr_proj_error
                     if opt.explain_reg_weight > 0:
-                        exp_mask_stack = tf.expand_dims(curr_exp[:,:,:,1], -1)
+                        exp_mask_stack = tf.expand_dims(curr_exp_logits[:,:,:,2], -1)
                 else:
                     proj_image_stack = tf.concat([proj_image_stack,
                                                   curr_proj_image], axis=3)
+                    proj_src_image_stack = tf.concat([proj_src_image_stack,
+                                                  curr_proj_src_image], axis=3)
                     proj_error_stack = tf.concat([proj_error_stack,
                                                   curr_proj_error], axis=3)
                     if opt.explain_reg_weight > 0:
                         exp_mask_stack = tf.concat([exp_mask_stack,
-                            tf.expand_dims(curr_exp[:,:,:,1], -1)], axis=3)
+                            tf.expand_dims(curr_exp_logits[:,:,:,2], -1)], axis=3)
             tgt_image_all.append(curr_tgt_image)
             src_image_stack_all.append(curr_src_image_stack)
             proj_image_stack_all.append(proj_image_stack)
+            proj_src_image_stack_all.append(proj_src_image_stack)
             proj_error_stack_all.append(proj_error_stack)
             if opt.explain_reg_weight > 0:
                 exp_mask_stack_all.append(exp_mask_stack)
@@ -141,6 +141,7 @@ class SfMLearner(object):
         self.tgt_image_all = tgt_image_all
         self.src_image_stack_all = src_image_stack_all
         self.proj_image_stack_all = proj_image_stack_all
+        self.proj_src_image_stack_all = proj_src_image_stack_all
         self.proj_error_stack_all = proj_error_stack_all
         self.exp_mask_stack_all = exp_mask_stack_all
         return self.total_loss
@@ -156,24 +157,21 @@ class SfMLearner(object):
         ref_exp_mask = tf.constant(ref_exp_mask, dtype=tf.float32)
         return ref_exp_mask
 
-    def compute_exp_reg_loss(self, pred, ref):
-        l = tf.nn.softmax_cross_entropy_with_logits(
-            labels=tf.reshape(ref, [-1, 2]),
-            logits=tf.reshape(pred, [-1, 2]))
-        return tf.reduce_mean(l)
-
     def compute_smooth_loss(self, pred_disp):
         def gradient(pred):
             D_dy = pred[:, 1:, :, :] - pred[:, :-1, :, :]
             D_dx = pred[:, :, 1:, :] - pred[:, :, :-1, :]
             return D_dx, D_dy
+        beta = 0.25
         dx, dy = gradient(pred_disp)
         dx2, dxdy = gradient(dx)
         dydx, dy2 = gradient(dy)
-        return tf.reduce_mean(tf.abs(dx2)) + \
+        gx = tf.reduce_mean(tf.abs(dx)) + tf.reduce_mean(tf.abs(dy))
+        hx  =  tf.reduce_mean(tf.abs(dx2)) + \
                tf.reduce_mean(tf.abs(dxdy)) + \
                tf.reduce_mean(tf.abs(dydx)) + \
                tf.reduce_mean(tf.abs(dy2))
+        return beta*gx + (1-beta)*hx
 
     def collect_summaries(self):
         opt = self.opt
@@ -181,13 +179,14 @@ class SfMLearner(object):
         tf.summary.scalar("pixel_loss", self.pixel_loss)
         tf.summary.scalar("smooth_loss", self.smooth_loss)
         tf.summary.scalar("exp_loss", self.exp_loss)
-        for s in range(opt.num_scales):
+        for s in range(1):
             tf.summary.histogram("scale%d_depth" % s, self.pred_depth[s])
-            tf.summary.image('scale%d_disparity_image' % s, 1./self.pred_depth[s])
+            tf.summary.image('scale%d_depth_image' % s, 1./self.pred_depth[s])
             tf.summary.image('scale%d_target_image' % s, \
                              self.deprocess_image(self.tgt_image_all[s]))
-            for i in range(1):
+            for i in range(opt.num_source):
                 if opt.explain_reg_weight > 0:
+                    tf.summary.histogram("scaled%d_exp_mask%d" % (s, i), self.exp_mask_stack_all[s][:,:,:,i])
                     tf.summary.image(
                         'scale%d_exp_mask_%d' % (s, i),
                         tf.expand_dims(self.exp_mask_stack_all[s][:,:,:,i], -1))
@@ -196,6 +195,8 @@ class SfMLearner(object):
                     self.deprocess_image(self.src_image_stack_all[s][:, :, :, i*3:(i+1)*3]))
                 tf.summary.image('scale%d_projected_image_%d' % (s, i),
                     self.deprocess_image(self.proj_image_stack_all[s][:, :, :, i*3:(i+1)*3]))
+                tf.summary.image('scale%d_projected_src_image_%d'% (s, i),
+                    self.deprocess_image(self.proj_src_image_stack_all[s][:, :, :, i*3:(i+1)*3]))
                 tf.summary.image('scale%d_proj_error_%d' % (s, i),
                     self.deprocess_image(tf.clip_by_value(self.proj_error_stack_all[s][:,:,:,i*3:(i+1)*3] - 1, -1, 1)))
         tf.summary.histogram("tx", self.pred_poses[:,:,0])
@@ -209,31 +210,10 @@ class SfMLearner(object):
         # for grad, var in self.grads_and_vars:
         #     tf.summary.histogram(var.op.name + "/gradients", grad)
 
-    def average_gradients(self, tower_grads):
-        average_grads = []
-        for grad_and_vars in zip(*tower_grads):
-            grads = []
-            for g, _ in grad_and_vars:
-                expanded_g = tf.expand_dims(g, 0)
-                grads.append(expanded_g)
-            grad = tf.concat(axis=0, values=grads)
-            grad = tf.reduce_mean(grad, 0)
-
-            v = grad_and_vars[0][1]
-            grad_and_var = (grad, v)
-            average_grads.append(grad_and_var)
-        return average_grads
-
     def train(self, opt):
         opt.num_source = opt.seq_length - 1
         # TODO: currently fixed to 4
         opt.num_scales = 3
-        self.global_step = tf.Variable(0,
-                                           name='global_step',
-                                           trainable=False)
-        learning_rate = tf.train.inverse_time_decay(opt.learning_rate, self.global_step, 25000., 1)
-        optim = tf.train.AdamOptimizer(learning_rate, opt.beta1)
-
         self.opt = opt
         loader = DataLoader(opt.dataset_dir,
                             opt.batch_size,
@@ -244,58 +224,56 @@ class SfMLearner(object):
 
         is_training_tf = tf.placeholder(tf.bool, shape=[])
         #select from a queue
-        #select_q = tf.placeholder(tf.int32, name="select_q", shape=[])
         with tf.name_scope("train_data"):
             tgt_image_train, src_image_stack_train, intrinsics_train = loader.load_train_batch()
+            tgt_image_train, src_image_stack_train, intrinsics_train = loader.fetch_train_batch(tgt_image_train, src_image_stack_train, intrinsics_train)
 
         with tf.name_scope("validation_data"):
             tgt_image_val, src_image_stack_val, intrinsics_val = loader.load_val_batch()
+            tgt_image_val, src_image_stack_val, intrinsics_val = loader.fetch_val_batch(tgt_image_val, src_image_stack_val, intrinsics_val)
 
-        #tgt_image = tf.cond(is_training_tf, lambda: tgt_image_train, lambda: tgt_image_val)
-        #src_image_stack = tf.cond(is_training_tf, lambda: src_image_stack_train, lambda: src_image_stack_val)
-        #intrinsics = tf.cond(is_training_tf, lambda: intrinsics_train, lambda: intrinsics_val)
-        tower_grads = []
-        #using multiple gpus
 
-        for i in range(opt.num_gpus):
-            reuse = i > 0
-            with tf.device('/gpu:%d' % i):
-                with tf.name_scope('GPU_%d' % i):
-                    #fetch data using train.batch
-                    tgt_image_train, src_image_stack_train, intrinsics_train = loader.fetch_train_batch(tgt_image_train, src_image_stack_train, intrinsics_train)
-                    if i == 0:
-                        tgt_image_val, src_image_stack_val, intrinsics_val = loader.fetch_val_batch(tgt_image_val, src_image_stack_val, intrinsics_val)
-                    #calculate loss
-                    total_loss = build_train_graph(tgt_image_train, src_image_stack_train, intrinsics_train, is_training=True, reuse=reuse)
-                    #create train_op
-                    with tf.name_scope("train_op"):
-                        grads = optim.compute_gradients(total_loss)
-                    tower_grads.append(grads)
-        grads = self.average_gradients(tower_grads)
-
-        apply_gradient_op = optim.apply_gradients(grads, global_step=self.global_step)
-
-        #total_loss = tf.cond(is_training_tf, true_fn = lambda: self.build_train_graph(
-        #        tgt_image_train, src_image_stack_train, intrinsics_train, is_training=True, reuse=False),
-        #        false_fn=lambda: self.build_train_graph(tgt_image_val, src_image_stack_val, intrinsics_val, is_training=False, reuse=True))
+        total_loss = tf.cond(is_training_tf, true_fn = lambda: self.build_train_graph(
+                tgt_image_train, src_image_stack_train, intrinsics_train, is_training=True, reuse=False),
+                false_fn=lambda: self.build_train_graph(tgt_image_val, src_image_stack_val, intrinsics_val, is_training=False, reuse=True))
         self.steps_per_epoch = loader.steps_per_epoch
         self.collect_summaries()
+        #using polyak averaging
+        self.ema = tf.train.ExponentialMovingAverage(decay=0.9997)
         with tf.name_scope("parameter_count"):
             parameter_count = tf.reduce_sum([tf.reduce_prod(tf.shape(v)) \
                                             for v in tf.trainable_variables()])
 
+
+        #create train op
+        with tf.name_scope("train_op"):
+            train_vars = [var for var in tf.trainable_variables()]
+            self.global_step = tf.Variable(0,
+                                           name='global_step',
+                                           trainable=False)
+            #learning_rate = tf.train.inverse_time_decay(opt.learning_rate, self.global_step, 25000., 1)
+            learning_rate = opt.learning_rate
+            #optim = tf.train.AdamOptimizer(learning_rate, opt.beta1)
+            optim = tf.contrib.opt.NadamOptimizer(learning_rate)
             # self.grads_and_vars = optim.compute_gradients(total_loss,
             #                                               var_list=train_vars)
             # self.train_op = optim.apply_gradients(self.grads_and_vars)
-            self.train_op = slim.learning.create_train_op(total_loss, optim, global_step=self.global_step)
-            #self.incr_global_step = tf.assign(self.global_step,
-            #                                  self.global_step+1)
-
+            self.opt_op = slim.learning.create_train_op(total_loss, optim, global_step=self.global_step)
+            with tf.control_dependencies([self.opt_op]):
+                self.train_op = self.ema.apply(tf.trainable_variables())
+        #variables_to_restore = slim.get_variables_to_restore(exclude=[args.resnet_model + "/logits", "optimizer_vars",
+        #                                                      "DeepLab_v3/ASPP_layer", "DeepLab_v3/logits"] + \
+        #                                                      ["DeepLab_v3/icnv"+str(i+1) for i in range(4)] + \
+        #                                                      ["DeepLab_v3/upcnv"+str(i+1) for i in range(4)] + \
+        #                                                      ["DeepLab_v3/disp1"] +\
+        #                                                      ["pose_exp_net/cnv"+str(i+1) for i in range(7)] + \
+        #                                                      ["pose_exp_net/pose/pred", "pose_exp_net/pose/cnv6", "pose_exp_net/pose/cnv7"])
         #self.saver = tf.train.Saver([var for var in tf.model_variables()] + \
         #self.restorer = tf.train.Saver([var for var in variables_to_restore] ,\
         #                            #[self.global_step],
         #                             max_to_keep=10)
-        self.saver = tf.train.Saver()
+        self.saver = tf.train.Saver(self.ema.variables_to_restore())
+
         sv = tf.train.Supervisor(logdir=opt.checkpoint_dir,
                                  save_summaries_secs=0,
                                  saver=None)
@@ -317,6 +295,7 @@ class SfMLearner(object):
                 print("Resume training from previous checkpoint: %s" % checkpoint)
             #try:
                 self.saver.restore(sess, checkpoint)
+
             #    #self.restorer.restore(sess, "./resnet/checkpoints/" + args.resnet_model + ".ckpt")
             #    self.restorer.restore(sess, "./resnet/checkpoints/model.ckpt")
             #    print("Model checkpoints for " + args.resnet_mode + " restored!")
@@ -350,11 +329,14 @@ class SfMLearner(object):
                     average_val_loss = 0.
                     val_steps = opt.validation_freq//10
                     for j in range(val_steps):
-                        fetches = {"val": total_loss, "summary": sv.summary_op}
+                        fetches = {"val": total_loss}
+                        if j % 4 == 0:
+                            fetches["summary"] = sv.summary_op
                         feed_dict = {is_training_tf: False}
                         val_results = sess.run(fetches, feed_dict)
                         average_val_loss += val_results["val"]
-                        sv.summary_writer.add_summary(val_results["summary"], gs+j)
+                        if j % 4 == 0:
+                            sv.summary_writer.add_summary(val_results["summary"], gs+j)
                     average_val_loss /= val_steps
 
 
@@ -372,7 +354,7 @@ class SfMLearner(object):
                 if step % opt.save_latest_freq == 0:
                     self.save(sess, opt.checkpoint_dir, 'latest')
 
-                if step % self.steps_per_epoch == 0:
+                if step % (self.steps_per_epoch) == 0:
                     self.save(sess, opt.checkpoint_dir, gs)
 
     def build_depth_test_graph(self):
@@ -384,7 +366,7 @@ class SfMLearner(object):
                 pred_depth, depth_net_endpoints = disp_net_cspn(
                         input_mc, is_training=False)
             else:
-                pred_disp, depth_net_endpoints = network.disp_aspp(
+                pred_disp, depth_net_endpoints = network.disp_aspp_u(
                     input_mc, args, False, False, [self.img_height, self.img_width])
                 pred_depth = [1./disp for disp in pred_disp]
         pred_depth = pred_depth[0]
@@ -407,7 +389,7 @@ class SfMLearner(object):
             self.inputs = input_uint8
             self.pred_poses = pred_poses
 
-    def preprocess_image(self, image):
+    def preprocess_image(self, image, is_training=False):
         # Assuming input image is uint8
         image = tf.image.convert_image_dtype(image, dtype=tf.float32)
         return image * 2. -1.

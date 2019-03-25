@@ -87,14 +87,18 @@ class cityscapes_loader(object):
             curr_image_file = os.path.join(self.dataset_dir, 'leftImg8bit_sequence',
                                 self.split, city, curr_frame_id + 'leftImg8bit.png')
             curr_img = scipy.misc.imread(curr_image_file)
+            #crop first
+            if crop_bottom:
+                ymax = int(curr_img.shape[0] * 0.77)
+                curr_img = curr_img[:ymax]
             raw_shape = np.copy(curr_img.shape)
             if o == 0:
                 zoom_y = self.img_height/raw_shape[0]
                 zoom_x = self.img_width/raw_shape[1]
             curr_img = scipy.misc.imresize(curr_img, (self.img_height, self.img_width))
-            if crop_bottom:
-                ymax = int(curr_img.shape[0] * 0.75)
-                curr_img = curr_img[:ymax]
+            #if crop_bottom:
+            #    ymax = int(curr_img.shape[0] * 0.75)
+            #    curr_img = curr_img[:ymax]
             image_seq.append(curr_img)
         return image_seq, zoom_x, zoom_y
 

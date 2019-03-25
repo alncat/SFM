@@ -3,7 +3,7 @@ import tensorflow as tf
 import pprint
 import random
 import numpy as np
-from SfMLearner_bilinear import SfMLearner
+from SfMLearner import SfMLearner
 import os
 
 flags = tf.app.flags
@@ -21,7 +21,7 @@ flags.DEFINE_integer("seq_length", 3, "Sequence length for each example")
 flags.DEFINE_integer("max_steps", 200000, "Maximum number of training iterations")
 flags.DEFINE_integer("summary_freq", 100, "Logging every log_freq iterations")
 flags.DEFINE_integer("validation_freq", 250, "Calculating loss on validation set")
-flags.DEFINE_integer("save_latest_freq", 5000, \
+flags.DEFINE_integer("save_latest_freq", 2500, \
     "Save the latest model every save_latest_freq iterations (overwrites the previous latest model)")
 flags.DEFINE_boolean("continue_train", False, "Continue training from previous checkpoint")
 flags.DEFINE_integer("num_source", 2, "The number of supervision sources")
