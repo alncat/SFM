@@ -397,7 +397,7 @@ class SfMLearner(object):
                 if step % opt.save_latest_freq == 0:
                     self.save(sess, opt.checkpoint_dir, 'latest')
 
-                if step % (self.steps_per_epoch//3) == 0:
+                if step % (opt.save_latest_freq*2 + 100) == 0:
                     self.save(sess, opt.checkpoint_dir, gs)
 
     def build_depth_test_graph(self):

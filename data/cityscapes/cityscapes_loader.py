@@ -89,7 +89,7 @@ class cityscapes_loader(object):
             curr_img = scipy.misc.imread(curr_image_file)
             #crop first
             if crop_bottom:
-                ymax = int(curr_img.shape[0] * 0.77)
+                ymax = int(curr_img.shape[0] * 0.7)
                 curr_img = curr_img[:ymax]
             raw_shape = np.copy(curr_img.shape)
             if o == 0:

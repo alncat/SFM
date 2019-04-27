@@ -23,6 +23,9 @@ flags.DEFINE_integer("summary_freq", 100, "Logging every log_freq iterations")
 flags.DEFINE_integer("validation_freq", 250, "Calculating loss on validation set")
 flags.DEFINE_integer("save_latest_freq", 2500, \
     "Save the latest model every save_latest_freq iterations (overwrites the previous latest model)")
+flags.DEFINE_integer("save_freq", 5013, \
+    "Save the latest model every save_freq iterations (overwrites the previous latest model)")
+
 flags.DEFINE_boolean("continue_train", False, "Continue training from previous checkpoint")
 flags.DEFINE_integer("num_source", 2, "The number of supervision sources")
 flags.DEFINE_integer("num_scales", 3, "The number of multiscale")

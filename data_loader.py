@@ -186,15 +186,18 @@ class DataLoader(object):
             return im, intrinsics
         # Random scaling
         def random_scaling(im, intrinsics):
-            batch_size, in_h, in_w, _ = tf.unstack(tf.shape(im))#im.get_shape().as_list()
+            batch_size, in_h_, in_w_, _ = tf.unstack(tf.shape(im))#im.get_shape().as_list()
             scaling = tf.random_uniform([2], 1, 1.15)
             x_scaling = scaling[0]
             y_scaling = scaling[1]
-            in_h = tf.cast(in_h, dtype=tf.float32)
-            in_w = tf.cast(in_w, dtype=tf.float32)
+            in_h = tf.cast(in_h_, dtype=tf.float32)
+            in_w = tf.cast(in_w_, dtype=tf.float32)
             out_h = tf.cast(in_h * y_scaling, dtype=tf.int32)
             out_w = tf.cast(in_w * x_scaling, dtype=tf.int32)
-            im = tf.image.resize_area(im, [out_h, out_w])
+            im = tf.image.resize_bilinear(im, [out_h, out_w])
+            #im = tf.image.resize_bilinear(im, [out_h, in_w_])
+            #im = tf.image.crop_to_bounding_box(
+            #        im, 0, 0, in_h_, in_w_)
             fx = intrinsics[:,0,0] * x_scaling
             fy = intrinsics[:,1,1] * y_scaling
             cx = intrinsics[:,0,2] * x_scaling
@@ -206,8 +209,8 @@ class DataLoader(object):
         def random_cropping(im, intrinsics, out_h, out_w):
             # batch_size, in_h, in_w, _ = im.get_shape().as_list()
             batch_size, in_h, in_w, _ = tf.unstack(tf.shape(im))
-            offset_y = tf.random_uniform([1], 0, in_h - out_h + 1, dtype=tf.int32)[0]
-            offset_x = tf.random_uniform([1], 0, in_w - out_w + 1, dtype=tf.int32)[0]
+            offset_y = tf.random_uniform([], 0, in_h - out_h + 1, dtype=tf.int32)
+            offset_x = tf.random_uniform([], 0, in_w - out_w + 1, dtype=tf.int32)
             im = tf.image.crop_to_bounding_box(
                 im, offset_y, offset_x, out_h, out_w)
             fx = intrinsics[:,0,0]
@@ -242,11 +245,32 @@ class DataLoader(object):
             random_g = tf.random_uniform([], 0.8, 1.2)
             im = im ** random_g
             return im
+
+        def random_hue(im):
+            random_h = tf.random_uniform([1,1,1,1], -0.25, 0.25)
+            random_s = tf.random_uniform([], 1/1.25, 1.25)
+            #zeros = tf.zeros([1,1,1,2])
+            #offset = tf.concat([random_h, zeros], axis=3)
+            new_ims = []
+            for i in range(3):
+                new_im = tf.image.rgb_to_hsv(tf.slice(im, [0, 0, 0, i*3], [-1, -1, -1, 3]))
+                hue = tf.slice(new_im, [0, 0, 0, 0], [-1, -1, -1, 1])
+                saturation = tf.slice(new_im, [0, 0, 0, 1], [-1, -1, -1, 1])
+                value = tf.slice(new_im, [0, 0, 0, 2], [-1, -1, -1, 1])
+
+                hue = tf.mod(hue + (random_h + 1.), 1.)
+                saturation = tf.clip_by_value(saturation*random_s, 0., 1.)
+                new_im = tf.concat([hue, saturation, value], axis=3)
+                new_im = tf.image.hsv_to_rgb(new_im)
+                new_im = tf.image.convert_image_dtype(new_im, tf.float32)
+                new_ims.append(new_im)
+            return tf.concat(new_ims, axis=3)
         #im, intrinsics = random_rotate(im, intrinsics)
         #im, intrinsics = random_scaling(im, intrinsics)
         #im, intrinsics = random_cropping(im, intrinsics, out_h, out_w)
         #im = random_gamma(im)
         im = tf.image.convert_image_dtype(im, tf.float32)
+        #im = random_hue(im)
         im = random_brightness(im)
         im = random_saturation(im)
         im = tf.image.convert_image_dtype(im, tf.uint8, saturate=True)

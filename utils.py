@@ -114,6 +114,7 @@ def pixel2cam(depth, pixel_coords, intrinsics, is_homogeneous=True, add_trans=Fa
       translations = tf.transpose(translations, perm=[0,3,1,2])
       translations = tf.reshape(translations, [batch, 3, -1])
       cam_coords += translations*cam_coords
+      #cam_coords += translations*depth
   if is_homogeneous:
     ones = tf.ones([batch, 1, height*width])
     cam_coords = tf.concat([cam_coords, ones], axis=1)
@@ -278,6 +279,9 @@ def bilinear_sampler(imgs, coords):
     x_max = tf.cast(tf.shape(imgs)[2] - 1, 'float32')
     zero = tf.zeros([1], dtype='float32')
 
+    x_out = tf.logical_or(coords_x < -1, coords_x > x_max + 1)
+    y_out = tf.logical_or(coords_y < -1, coords_y > y_max + 1)
+
     x0_safe = tf.clip_by_value(x0, zero, x_max)
     y0_safe = tf.clip_by_value(y0, zero, y_max)
     x1_safe = tf.clip_by_value(x1, zero, x_max)
@@ -328,8 +332,9 @@ def bilinear_sampler(imgs, coords):
         w00 * im00, w01 * im01,
         w10 * im10, w11 * im11
     ])
-    mask = 1. - tf.cast(tf.equal(output, 0), 'float32')
-    mask = slim.avg_pool2d(mask, 3, 1, 'SAME')
+    #mask = 1. - tf.cast(tf.equal(output, 0), 'float32')
+    #mask = slim.avg_pool2d(mask, 3, 1, 'SAME')
+    mask = 1. - tf.cast(tf.logical_or(x_out, y_out), 'float32')
 
     return output, mask
 

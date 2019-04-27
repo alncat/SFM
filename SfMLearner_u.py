@@ -46,17 +46,6 @@ class SfMLearner(object):
                              do_trans=(opt.explain_reg_weight > 0),
                              is_training=is_training,
                              reuse = reuse)
-        #pred_poses1, pred_exp_logits1, pose_exp_net_endpoints1 = \
-        #        pose_trans_u_net(tgt_image,
-        #                     tf.slice(src_image_stack, [0, 0, 0, 3],
-        #                         [-1, -1, -1, 3]),
-        #                     do_trans=(opt.explain_reg_weight > 0),
-        #                     is_training=is_training,
-        #                     reuse = True)
-        #pred_poses = tf.concat([pred_poses, pred_poses1], axis=1)
-        #pred_exp_logits = [tf.concat([pred_exp_logits[i], pred_exp_logits1[i]], axis=3) for i in range(len(pred_exp_logits))]
-        #pred_poses = [pred_poses0, pred_poses1]
-        #pred_exp_logits = [pred_exp_logits0, pred_exp_logits1]
 
         #pred_poses, pred_exp_logits, pose_exp_net_endpoints = \
         #        pose_exp_u_resnet(depth_net_endpoints,
@@ -99,31 +88,29 @@ class SfMLearner(object):
                 #concat depth to src image
                 if opt.explain_reg_weight > 0:
                     curr_exp_logits = tf.slice(pred_exp_logits[s],
-                                                [0, 0, 0, i*3],
-                                                [-1, -1, -1, 3])
-                    #curr_exp_logits = pred_exp_logits[i][s]
+                                                [0, 0, 0, i],
+                                                [-1, -1, -1, 1])
                     curr_exp_logits = tf.image.resize_bilinear(curr_exp_logits, [opt.img_height, opt.img_width])
                     #curr_x = tf.slice(curr_exp_logits, [0, 0, 0, 0], [-1, -1, -1, 1])
                     #curr_z = tf.slice(curr_exp_logits, [0, 0, 0, 1], [-1, -1, -1, 1])
-                    #curr_zeros = tf.zeros([opt.batch_size, opt.img_height, opt.img_width, 2])
-                    #curr_exp_logits = tf.concat([curr_zeros, curr_exp_logits], axis=3)
+                    curr_zeros = tf.zeros([opt.batch_size, opt.img_height, opt.img_width, 2])
+                    curr_exp_logits = tf.concat([curr_zeros, curr_exp_logits], axis=3)
                     #curr_exp_logits = tf.concat([curr_x, curr_zeros, curr_z], axis=3)
 
                 curr_proj_image, proj_mask  = projective_inverse_warp(
                     curr_src_image_stack[:,:,:,3*i:3*(i+1)],
+                    #curr_tgt_image,
                     tf.squeeze(pred_depth_s, axis=3),
                     pred_poses[:,i,:],
-                    #pred_poses[i][:,0,:],
                     intrinsics[:,0,:,:],
-                    add_trans=True,
+                    add_trans=False,
                     translations=curr_exp_logits)
                 curr_proj_src_image, proj_src_mask = projective_warp(
                     curr_tgt_image,
                     tf.squeeze(pred_depth_s, axis=3),
                     pred_poses[:,i,:],
-                    #pred_poses[i][:,0,:],
                     intrinsics[:,0,:,:],
-                    add_trans=True,
+                    add_trans=False,
                     translations=curr_exp_logits)
                 curr_proj_error = proj_mask*tf.abs(curr_proj_image - curr_tgt_image)
                 curr_proj_error += proj_src_mask*tf.abs(curr_proj_src_image - curr_src_image_stack[:,:,:,3*i:3*(i+1)])

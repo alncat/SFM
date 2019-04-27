@@ -309,6 +309,7 @@ def resnet_v2_50_slim(inputs,
                  num_classes=None,
                  is_training=True,
                  multi_grid=[1, 2, 4],
+                 num_units=[2,3,3,2],
                  global_pool=True,
                  output_stride=None,
                  spatial_squeeze=True,
@@ -317,14 +318,14 @@ def resnet_v2_50_slim(inputs,
                  outputs_collections_name=None):
     """ResNet-50 model of [1]. See resnet_v2() for arg and return description."""
     blocks = [
-        resnet_v2_block('block1', base_depth=64, num_units=2, stride=2),
-        resnet_v2_block('block2', base_depth=128, num_units=3, stride=2),
-        resnet_v2_block('block3', base_depth=256, num_units=3, stride=2),
-        resnet_v2_block('block4', base_depth=512, num_units=2, stride=2),
+        resnet_v2_block('block1', base_depth=64, num_units=num_units[0], stride=2),
+        resnet_v2_block('block2', base_depth=128, num_units=num_units[1], stride=2),
+        resnet_v2_block('block3', base_depth=256, num_units=num_units[2], stride=2),
+        resnet_v2_block('block4', base_depth=256, num_units=num_units[3], stride=2),
     ]
     return resnet_v2(inputs, blocks, num_classes, is_training=is_training,
                      global_pool=global_pool, output_stride=output_stride, multi_grid=multi_grid,
-                     include_root_block=False, spatial_squeeze=spatial_squeeze,
+                     include_root_block=True, spatial_squeeze=spatial_squeeze,
                      reuse=reuse, scope=scope, outputs_collections_name=outputs_collections_name)
 
 def resnet_v2_101(inputs,

@@ -49,7 +49,7 @@ class SfMLearner(object):
 
         #with tf.name_scope("pose_and_explainability_prediction", reuse=reuse):
         pred_poses, pred_exp_logits, pose_exp_net_endpoints = \
-                pose_exp_u_net(tgt_image,
+                pose_trans_u_net(tgt_image,
                              src_image_stack,
                              do_trans=(opt.explain_reg_weight > 0),
                              is_training=is_training,
@@ -127,7 +127,7 @@ class SfMLearner(object):
                 curr_proj_error += proj_src_mask*tf.abs(curr_proj_src_image - curr_src_image_stack[:,:,:,3*i:3*(i+1)])
                 #curr_proj_error = tf.abs(curr_proj_image - curr_src_image_stack[:,:,:,3*i:3*(i+1)])
                 curr_ssim_error = proj_mask*tf_ssim(curr_proj_image, curr_tgt_image, mean_metric=False)
-                curr_ssim_error += proj_src_mask*tf_ssim(curr_proj_src_image, curr_src_image_stack[:,:,:,3*i:3*(i+1)])
+                curr_ssim_error += proj_src_mask*tf_ssim(curr_proj_src_image, curr_src_image_stack[:,:,:,3*i:3*(i+1)], mean_metric=False)
                 # Cross-entropy loss as regularization for the
                 # explainability prediction
 
@@ -137,7 +137,7 @@ class SfMLearner(object):
                 if i == 0:
                     proj_image_stack = curr_proj_image
                     proj_src_image_stack = curr_proj_src_image
-                    proj_error_stack = curr_proj_error
+                    proj_error_stack = curr_ssim_error
                     if opt.explain_reg_weight > 0:
                         exp_mask_stack = tf.expand_dims(curr_exp_logits[:,:,:,2], -1)
                 else:
@@ -146,7 +146,7 @@ class SfMLearner(object):
                     proj_src_image_stack = tf.concat([proj_src_image_stack,
                                                   curr_proj_src_image], axis=3)
                     proj_error_stack = tf.concat([proj_error_stack,
-                                                  curr_proj_error], axis=3)
+                                                  curr_ssim_error], axis=3)
                     if opt.explain_reg_weight > 0:
                         exp_mask_stack = tf.concat([exp_mask_stack,
                             tf.expand_dims(curr_exp_logits[:,:,:,2], -1)], axis=3)
@@ -407,7 +407,7 @@ class SfMLearner(object):
                 if step % opt.save_latest_freq == 0:
                     self.save(sess, opt.checkpoint_dir, 'latest')
 
-                if step % (self.steps_per_epoch) == 0:
+                if step % (opt.save_freq) == 0:
                     self.save(sess, opt.checkpoint_dir, gs)
 
     def build_depth_test_graph(self):
