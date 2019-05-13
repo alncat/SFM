@@ -19,7 +19,7 @@ args.is_training = True
 args.batch_norm_decay = 0.9997
 args.batch_norm_epsilon = 1e-5
 args.output_stride = 16
-args.resnet_model = "resnet_v2_50"
+args.resnet_model = "xception_41"
 
 class SfMLearner(object):
     def __init__(self):
@@ -32,17 +32,17 @@ class SfMLearner(object):
         src_image_stack = self.preprocess_image(src_image_stack, is_training)
 
         pred_disp, depth_net_endpoints = \
-                nets.disp_aspp_u_dense(tgt_image,
+                nets.disp_aspp_u_dense_x(tgt_image,
                                 args,
                                 is_training,
                                 reuse,
                                 [opt.img_height, opt.img_width])
         pred_disp = [d/tf.reduce_mean(d, axis=[1,2,3], keep_dims=True) for d in pred_disp]
-        #for i in range(opt.num_scales-1, -1, -1):
-        #    pred_disp[i] = tf.image.resize_bilinear(pred_disp[i], [opt.img_height, opt.img_width])
-        #    if i < opt.num_scales-1:
-        #        pred_disp[i] += pred_disp[i+1]
-        #pred_disp = [d/tf.reduce_mean(d, axis=[1,2,3], keep_dims=True) for d in pred_disp]
+        for i in range(opt.num_scales-1, -1, -1):
+            pred_disp[i] = tf.image.resize_bilinear(pred_disp[i], [opt.img_height, opt.img_width])
+            if i < opt.num_scales-1:
+                pred_disp[i] += pred_disp[i+1]
+        pred_disp = [d/tf.reduce_mean(d, axis=[1,2,3], keep_dims=True) for d in pred_disp]
 
         pred_depth = [1./d for d in pred_disp]
 
@@ -88,8 +88,8 @@ class SfMLearner(object):
             curr_tgt_image = tgt_image
             curr_src_image_stack = src_image_stack
 
-            pred_depth_s = tf.image.resize_bilinear(pred_depth[s], [opt.img_height, opt.img_width])
-            #pred_depth_s = pred_depth[s]
+            #pred_depth_s = tf.image.resize_bilinear(pred_depth[s], [opt.img_height, opt.img_width])
+            pred_depth_s = pred_depth[s]
 
             if opt.smooth_weight > 0:
                 smooth_loss += opt.smooth_weight/(2**s) * \
@@ -258,7 +258,7 @@ class SfMLearner(object):
     def train(self, opt):
         opt.num_source = opt.seq_length - 1
         # TODO: currently fixed to 4
-        opt.num_scales = 4
+        opt.num_scales = 3
         self.opt = opt
         loader = DataLoader(opt.dataset_dir,
                             opt.batch_size,
@@ -334,9 +334,9 @@ class SfMLearner(object):
         config = tf.ConfigProto(device_count = {'GPU': 2})
         config.gpu_options.allow_growth = True
         with sv.managed_session(config=config) as sess:
-            #if not opt.continue_train:
+            if not opt.continue_train:
                 #self.restorer.restore(sess, "resnet_v2_save/1538687457/variables/variables")
-                #self.restorer.restore(sess, "resnet_v2_50.ckpt")
+                self.restorer.restore(sess, "resnet_v2_50.ckpt")
             #print('Trainable variables: ')
             #for var in tf.trainable_variables():
             #    print(var.name)

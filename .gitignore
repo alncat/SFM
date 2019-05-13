@@ -1,4 +1,6 @@
 check*
 best*
+resnet_v2_save
+resnet_v2_50*
 kitti_raw_eigen
 __pycache__

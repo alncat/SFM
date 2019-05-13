@@ -117,6 +117,8 @@ def pose_trans_u_net(tgt_image, src_image_stack, do_trans=True, is_training=True
                     upcnv5 = slim.conv2d(upcnv5, 256, [3, 3], scope='upcnv5')
                     upcnv4 = tf.image.resize_bilinear(upcnv5, [H//8, W//8])
                     upcnv4 = slim.conv2d(upcnv4, 128, [3, 3], scope='upcnv4')
+                    mask4 = 0.01*slim.conv2d(upcnv4, 3*num_source, [3, 3], stride=1, scope='mask4',
+                        normalizer_fn=None, activation_fn=None)
                     upcnv3 = tf.image.resize_bilinear(upcnv4, [H//4, W//4])
                     upcnv3 = slim.conv2d(upcnv3, 64,  [3, 3], scope='upcnv3')
                     mask3 = 0.01*slim.conv2d(upcnv3, 3*num_source, [3, 3], stride=1, scope='mask3',
@@ -137,7 +139,7 @@ def pose_trans_u_net(tgt_image, src_image_stack, do_trans=True, is_training=True
                 mask3 = None
                 mask4 = None
             end_points = utils.convert_collection_to_dict(end_points_collection)
-            return pose_final, [mask1, mask2, mask3], end_points
+            return pose_final, [mask1, mask2, mask3, mask4], end_points
 
 def pose_exp_u_net(tgt_image, src_image_stack, do_trans=True, is_training=True, reuse=False):
     inputs = tf.concat([tgt_image, src_image_stack], axis=3)

@@ -199,8 +199,9 @@ def projective_warp(img, depth, pose, intrinsics, inverse_pose=False, add_trans=
   # Get a 4x4 transformation matrix from 'target' camera frame to 'source'
   # pixel frame.
   proj_tgt_cam_to_src_pixel = tf.matmul(intrinsics, pose)
-  src_pixel_coords, _ = cam2pixel(cam_coords, proj_tgt_cam_to_src_pixel)
-  output_img, output_mask = bilinear_project(img, src_pixel_coords)
+  src_pixel_coords, new_depth = cam2pixel(cam_coords, proj_tgt_cam_to_src_pixel)
+  #output_img, output_mask = bilinear_project(img, src_pixel_coords)
+  output_img, output_mask = bilinear_project(img, src_pixel_coords, use_depth=True, depth=new_depth)
   return output_img, output_mask
 
 def projective_inverse_warp(img, depth, pose, intrinsics, inverse_pose=False, add_trans=False, translations=None):
@@ -338,7 +339,7 @@ def bilinear_sampler(imgs, coords):
 
     return output, mask
 
-def bilinear_project(imgs, coords):
+def bilinear_project(imgs, coords, use_depth=False, depth=None):
   """Construct a new image by bilinear sampling from the input image.
 
   Points falling outside the source image boundary have value 0.
@@ -370,6 +371,7 @@ def bilinear_project(imgs, coords):
 
     coords_x = tf.cast(coords_x, 'float32')
     coords_y = tf.cast(coords_y, 'float32')
+
 
     x0 = tf.floor(coords_x)
     x1 = x0 + 1
@@ -431,6 +433,14 @@ def bilinear_project(imgs, coords):
     dist10 = tf.exp(-(wt_x1*wt_x1 + wt_y0*wt_y0)/2)
     dist11 = tf.exp(-(wt_x1*wt_x1 + wt_y1*wt_y1)/2)
 
+    if use_depth:
+        depth = tf.reshape(depth, [out_size[0], out_size[1], out_size[2], 1])
+        depth_w = tf.exp(-tf.clip_by_value(depth/4, 0, 10))
+        dist00 = depth_w * dist00
+        dist01 = depth_w * dist01
+        dist10 = depth_w * dist10
+        dist11 = depth_w * dist11
+
     ## sample from imgs
     imgs_flat = tf.reshape(imgs, tf.stack([-1, inp_size[3]]))
     imgs_flat = tf.cast(imgs_flat, 'float32')
@@ -450,7 +460,7 @@ def bilinear_project(imgs, coords):
     dist10 = tf.scatter_nd(idx10, dist10, [out_size[0], out_size[1], out_size[2], 1])
     dist11 = tf.scatter_nd(idx11, dist11, [out_size[0], out_size[1], out_size[2], 1])
 
-    dists = dist00 + dist01 + dist10 + dist11 + 1e-5
+    dists = dist00 + dist01 + dist10 + dist11 + 1e-10
 
     im00 = tf.scatter_nd(idx00, im00, out_size)
     im01 = tf.scatter_nd(idx01, im01, out_size)
