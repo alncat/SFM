@@ -7,6 +7,7 @@ import tensorflow as tf
 import tensorflow.contrib.slim as slim
 from data_loader import DataLoader
 from nets import *
+import nn_nets
 import network
 from utils import *
 
@@ -33,25 +34,25 @@ class SfMLearner(object):
             #else:
             #    tgt_image, src_image_stack, intrinsics = loader.load_val_batch()
             #tgt_image, src_image_stack, intrinsics = loader()
-        tgt_image = self.preprocess_image(tgt_image, is_training)
-        src_image_stack = self.preprocess_image(src_image_stack, is_training)
+        tgt_image = self.preprocess_image(tgt_image)
+        src_image_stack = self.preprocess_image(src_image_stack)
 
         #with tf.name_scope("depth_prediction"):
         if not self.use_cspn:
-            pred_disp, depth_net_endpoints = disp_aspp_u_dense(tgt_image,
+            pred_disp, depth_net_endpoints = network.disp_aspp(tgt_image,
                                                   args, is_training, reuse, [opt.img_height, opt.img_width])
-            pred_disp = [d/tf.reduce_mean(d, axis=[1,2,3], keep_dims=True) for d in pred_disp]
             pred_depth = [1./d for d in pred_disp]
         else:
             pred_disp, depth_net_endpoints = disp_net_cspn(tgt_image,
                                                   is_training=is_training)
-            pred_depth = pred_disp
+            pred_depth = [1./d for d in pred_disp]
+            #pred_depth = pred_disp
 
         #with tf.name_scope("pose_and_explainability_prediction", reuse=reuse):
         pred_poses, pred_exp_logits, pose_exp_net_endpoints = \
-                pose_trans_net(tgt_image,
+                pose_exp_net(tgt_image,
                              src_image_stack,
-                             do_trans=(opt.explain_reg_weight > 0),
+                             do_exp=(opt.explain_reg_weight > 0),
                              is_training=is_training,
                              reuse = reuse)
 
@@ -65,71 +66,64 @@ class SfMLearner(object):
         proj_error_stack_all = []
         proj_src_image_stack_all = []
         exp_mask_stack_all = []
-        alpha = 0.15
+        alpha = 0.5
         for s in range(opt.num_scales):
-            #if opt.explain_reg_weight > 0:
+            if opt.explain_reg_weight > 0:
                 # Construct a reference explainability mask (i.e. all
                 # pixels are explainable)
-            #    ref_exp_mask = self.get_reference_explain_mask(s)
+                ref_exp_mask = self.get_reference_explain_mask(s)
             # Scale the source and target images for computing loss at the
             # according scale.
-            #curr_tgt_image = tf.image.resize_area(tgt_image,
-            #    [int(opt.img_height/(2**s)), int(opt.img_width/(2**s))])
-            curr_tgt_image = tgt_image
-            curr_src_image_stack = src_image_stack
-            #curr_src_image_stack = tf.image.resize_area(src_image_stack,
-            #    [int(opt.img_height/(2**s)), int(opt.img_width/(2**s))])
+            curr_tgt_image = tf.image.resize_area(tgt_image,
+                [int(opt.img_height/(2**s)), int(opt.img_width/(2**s))])
+            curr_src_image_stack = tf.image.resize_area(src_image_stack,
+                [int(opt.img_height/(2**s)), int(opt.img_width/(2**s))])
 
-            pred_depth_s = tf.image.resize_bilinear(pred_depth[s], [opt.img_height, opt.img_width])
-
-            if opt.smooth_weight > 0 and not self.use_cspn:
-                smooth_loss += opt.smooth_weight/(2**s) * \
-                    self.compute_smooth_loss(pred_disp[s])
-                if opt.explain_reg_weight > 0:
-                    smooth_loss += opt.explain_reg_weight/(2**s) * \
-                    self.compute_smooth_loss(pred_exp_logits[s])
-
+            #if opt.smooth_weight > 0 and not self.use_cspn:
+            #    smooth_loss += opt.smooth_weight/(2**s) * \
+            #        self.compute_smooth_loss(pred_disp[s])
 
             for i in range(opt.num_source):
                 # Inverse warp the source image to the target image frame
-                #concat depth to src image
-                if opt.explain_reg_weight > 0:
-                    curr_exp_logits = tf.slice(pred_exp_logits[s],
-                                                [0, 0, 0, i],
-                                                [-1, -1, -1, 1])
-                    curr_exp_logits = tf.image.resize_bilinear(curr_exp_logits, [opt.img_height, opt.img_width])
-                    pred_depth_s += curr_exp_logits
-                    #normalize depth after adding
-                    #pred_depth_s = pred_depth_s/tf.reduce_mean(pred_depth_s, axis=[1,2,3], keep_dims=True)
-
-                curr_proj_image, proj_mask  = projective_inverse_warp(
+                curr_proj_image = projective_inverse_warp(
                     curr_src_image_stack[:,:,:,3*i:3*(i+1)],
                     #curr_tgt_image,
-                    tf.squeeze(pred_depth_s, axis=3),
+                    tf.squeeze(pred_depth[s], axis=3),
                     pred_poses[:,i,:],
-                    intrinsics[:,0,:,:])
-                curr_proj_src_image, proj_src_mask = projective_warp(
+                    intrinsics[:,s,:,:])
+                curr_proj_src_image = projective_warp(
                     curr_tgt_image,
-                    tf.squeeze(pred_depth_s, axis=3),
+                    tf.squeeze(pred_depth[s], axis=3),
                     pred_poses[:,i,:],
-                    intrinsics[:,0,:,:])
-                curr_proj_error = proj_mask*tf.abs(curr_proj_image - curr_tgt_image)
-                curr_proj_error += proj_src_mask*tf.abs(curr_proj_src_image - curr_src_image_stack[:,:,:,3*i:3*(i+1)])
+                    intrinsics[:,s,:,:])
+                curr_proj_error = tf.abs(curr_proj_image - curr_tgt_image)
+                curr_proj_error += tf.abs(curr_proj_src_image - curr_src_image_stack[:,:,:,3*i:3*(i+1)])
                 #curr_proj_error = tf.abs(curr_proj_image - curr_src_image_stack[:,:,:,3*i:3*(i+1)])
-                curr_ssim_error = proj_mask*tf_ssim(curr_proj_image, curr_tgt_image, mean_metric=False)
-                curr_ssim_error += proj_src_mask*tf_ssim(curr_proj_src_image, curr_src_image_stack[:,:,:,3*i:3*(i+1)])
+                curr_ssim_error = tf_ssim(curr_proj_image, curr_tgt_image, mean_metric=False)
+                curr_ssim_error += tf_ssim(curr_proj_src_image, curr_src_image_stack[:,:,:,3*i:3*(i+1)])
                 # Cross-entropy loss as regularization for the
                 # explainability prediction
-
+                if opt.explain_reg_weight > 0:
+                    curr_exp_logits = tf.slice(pred_exp_logits[s],
+                                               [0, 0, 0, i*2],
+                                               [-1, -1, -1, 2])
+                    exp_loss += opt.explain_reg_weight * \
+                        self.compute_exp_reg_loss(curr_exp_logits,
+                                                  ref_exp_mask)
+                    curr_exp = tf.nn.softmax(curr_exp_logits)
                 # Photo-consistency loss weighted by explainability
-                pixel_loss += alpha*tf.reduce_mean(curr_proj_error) + (1-alpha)*tf.reduce_mean(curr_ssim_error)
+                if opt.explain_reg_weight > 0:
+                    pixel_loss += tf.reduce_mean(curr_proj_error * \
+                        tf.expand_dims(curr_exp[:,:,:,1], -1))
+                else:
+                    pixel_loss += alpha*tf.reduce_mean(curr_proj_error) + (1-alpha)*tf.reduce_mean(curr_ssim_error)
                 # Prepare images for tensorboard summaries
                 if i == 0:
                     proj_image_stack = curr_proj_image
                     proj_src_image_stack = curr_proj_src_image
                     proj_error_stack = curr_proj_error
                     if opt.explain_reg_weight > 0:
-                        exp_mask_stack = tf.expand_dims(curr_exp_logits[:,:,:,0], -1)
+                        exp_mask_stack = tf.expand_dims(curr_exp[:,:,:,1], -1)
                 else:
                     proj_image_stack = tf.concat([proj_image_stack,
                                                   curr_proj_image], axis=3)
@@ -139,7 +133,7 @@ class SfMLearner(object):
                                                   curr_proj_error], axis=3)
                     if opt.explain_reg_weight > 0:
                         exp_mask_stack = tf.concat([exp_mask_stack,
-                            tf.expand_dims(curr_exp_logits[:,:,:,0], -1)], axis=3)
+                            tf.expand_dims(curr_exp[:,:,:,1], -1)], axis=3)
             tgt_image_all.append(curr_tgt_image)
             src_image_stack_all.append(curr_src_image_stack)
             proj_image_stack_all.append(proj_image_stack)
@@ -187,16 +181,13 @@ class SfMLearner(object):
             D_dy = pred[:, 1:, :, :] - pred[:, :-1, :, :]
             D_dx = pred[:, :, 1:, :] - pred[:, :, :-1, :]
             return D_dx, D_dy
-        beta = 0.25
         dx, dy = gradient(pred_disp)
         dx2, dxdy = gradient(dx)
         dydx, dy2 = gradient(dy)
-        gx = tf.reduce_mean(tf.abs(dx)) + tf.reduce_mean(tf.abs(dy))
-        hx  =  tf.reduce_mean(tf.abs(dx2)) + \
+        return tf.reduce_mean(tf.abs(dx2)) + \
                tf.reduce_mean(tf.abs(dxdy)) + \
                tf.reduce_mean(tf.abs(dydx)) + \
                tf.reduce_mean(tf.abs(dy2))
-        return beta*gx + (1-beta)*hx
 
     def collect_summaries(self):
         opt = self.opt
@@ -206,12 +197,11 @@ class SfMLearner(object):
         tf.summary.scalar("exp_loss", self.exp_loss)
         for s in range(1):
             tf.summary.histogram("scale%d_depth" % s, self.pred_depth[s])
-            tf.summary.image('scale%d_depth_image' % s, 1./self.pred_depth[s])
+            tf.summary.image('scale%d_depth_image' % s, self.pred_depth[s])
             tf.summary.image('scale%d_target_image' % s, \
                              self.deprocess_image(self.tgt_image_all[s]))
             for i in range(opt.num_source):
                 if opt.explain_reg_weight > 0:
-                    tf.summary.histogram("scaled%d_exp_mask%d" % (s, i), self.exp_mask_stack_all[s][:,:,:,i])
                     tf.summary.image(
                         'scale%d_exp_mask_%d' % (s, i),
                         tf.expand_dims(self.exp_mask_stack_all[s][:,:,:,i], -1))
@@ -269,12 +259,9 @@ class SfMLearner(object):
         #        tgt_image_train, src_image_stack_train, intrinsics_train, is_training=True, reuse=False)
         self.steps_per_epoch = loader.steps_per_epoch
         self.collect_summaries()
-        #using polyak averaging
-        self.ema = tf.train.ExponentialMovingAverage(decay=0.9997)
         with tf.name_scope("parameter_count"):
             parameter_count = tf.reduce_sum([tf.reduce_prod(tf.shape(v)) \
                                             for v in tf.trainable_variables()])
-
 
         #create train op
         with tf.name_scope("train_op"):
@@ -282,19 +269,14 @@ class SfMLearner(object):
             self.global_step = tf.Variable(0,
                                            name='global_step',
                                            trainable=False)
-            #learning_rate = tf.train.inverse_time_decay(opt.learning_rate, self.global_step, 25000., 1)
-            learning_rate = opt.learning_rate
-            #optim = tf.train.AdamOptimizer(learning_rate, opt.beta1)
-            optim = tf.contrib.opt.NadamOptimizer(learning_rate)
+            learning_rate = tf.train.inverse_time_decay(opt.learning_rate, self.global_step, 25000., 1)
+            optim = tf.train.AdamOptimizer(learning_rate, opt.beta1)
             # self.grads_and_vars = optim.compute_gradients(total_loss,
             #                                               var_list=train_vars)
             # self.train_op = optim.apply_gradients(self.grads_and_vars)
-            self.opt_op = slim.learning.create_train_op(total_loss, optim, global_step=self.global_step)
-            with tf.control_dependencies([self.opt_op]):
-                self.train_op = self.ema.apply(tf.trainable_variables())
+            self.train_op = slim.learning.create_train_op(total_loss, optim, global_step=self.global_step)
             #self.incr_global_step = tf.assign(self.global_step,
             #                                  self.global_step+1)
-        #variables_to_restore = slim.get_variables_to_restore(exclude=[self.ema.average_name(var) for var in tf.trainable_variables()])
 
         #variables_to_restore = slim.get_variables_to_restore(exclude=[args.resnet_model + "/logits", "optimizer_vars",
         #                                                      "DeepLab_v3/ASPP_layer", "DeepLab_v3/logits"] + \
@@ -307,16 +289,7 @@ class SfMLearner(object):
         #self.restorer = tf.train.Saver([var for var in variables_to_restore] ,\
         #                            #[self.global_step],
         #                             max_to_keep=10)
-        self.saver = tf.train.Saver(self.ema.variables_to_restore())
-        #variables_to_restore = set(tf.global_variables() + tf.local_variables())
-        #for var in tf.trainable_variables():
-        #    if self.ema.average_name(var) in variables_to_restore:
-        #        variables_to_restore.remove(self.ema.average_name(var))
-        #for var in tf.moving_average_variables():
-        #    if var in variables_to_restore:
-        #        variables_to_restore.remove(var)
-
-        #self.saver = tf.train.Saver()
+        self.saver = tf.train.Saver()
         sv = tf.train.Supervisor(logdir=opt.checkpoint_dir,
                                  save_summaries_secs=0,
                                  saver=None)
@@ -338,7 +311,6 @@ class SfMLearner(object):
                 print("Resume training from previous checkpoint: %s" % checkpoint)
             #try:
                 self.saver.restore(sess, checkpoint)
-
             #    #self.restorer.restore(sess, "./resnet/checkpoints/" + args.resnet_model + ".ckpt")
             #    self.restorer.restore(sess, "./resnet/checkpoints/model.ckpt")
             #    print("Model checkpoints for " + args.resnet_mode + " restored!")
@@ -397,21 +369,37 @@ class SfMLearner(object):
                 if step % opt.save_latest_freq == 0:
                     self.save(sess, opt.checkpoint_dir, 'latest')
 
-                if step % (opt.save_latest_freq*2 + 100) == 0:
+                if step % self.steps_per_epoch == 0:
                     self.save(sess, opt.checkpoint_dir, gs)
 
     def build_depth_test_graph(self):
         input_uint8 = tf.placeholder(tf.uint8, [self.batch_size,
                     self.img_height, self.img_width, 3], name='raw_input')
         input_mc = self.preprocess_image(input_uint8)
-        with tf.name_scope("depth_prediction"):
-            if self.use_cspn:
-                pred_depth, depth_net_endpoints = disp_net_cspn(
-                        input_mc, is_training=False)
-            else:
-                pred_disp, depth_net_endpoints = network.disp_aspp_u(
-                    input_mc, args, False, False, [self.img_height, self.img_width])
-                pred_depth = [1./disp for disp in pred_disp]
+        self.is_training_test = tf.placeholder(tf.bool, shape=[])
+        #with tf.name_scope("depth_prediction"):
+        if self.use_cspn:
+            pred_disp, depth_net_endpoints = tf.cond(self.is_training_test, true_fn = lambda: disp_net(
+                input_mc, is_training=True, reuse=False), false_fn=lambda: disp_net(input_mc, is_training=False, reuse=True))
+            pred_depth = [1./disp for disp in pred_disp]
+
+        else:
+            pred_disp, depth_net_endpoints = tf.cond(self.is_training_test, true_fn = lambda: disp_aspp_u_dense(
+            input_mc, args, True, False, [self.img_height, self.img_width]),
+            false_fn=lambda: disp_aspp_u_dense(input_mc, args, False, True, [self.img_height, self.img_width]))
+            #pred_disp, depth_net_endpoints = tf.cond(self.is_training_test, true_fn = lambda: disp_aspp_u_dense_sep(
+            #input_mc, args, True, False, [self.img_height, self.img_width]),
+            #false_fn=lambda: disp_aspp_u_dense_sep(input_mc, args, False, True, [self.img_height, self.img_width]))
+
+            #pred_disp, depth_net_endpoints = network.disp_bilinear(
+            #    input_mc, args, False, False, [self.img_height, self.img_width])
+            pred_disp = [d/tf.reduce_mean(d, axis=[1,2,3], keep_dims=True) for d in pred_disp]
+            for i in range(len(pred_disp) - 1,-1,-1):
+                pred_disp[i] = tf.image.resize_bilinear(pred_disp[i], [self.img_height, self.img_width])
+                if i < len(pred_disp) - 1:
+                    pred_disp[i] += pred_disp[i+1]
+            pred_disp = [d/tf.reduce_mean(d, axis=[1,2,3], keep_dims=True) for d in pred_disp]
+            pred_depth = [1./disp for disp in pred_disp]
         pred_depth = pred_depth[0]
         self.inputs = input_uint8
         self.pred_depth = pred_depth
@@ -432,12 +420,9 @@ class SfMLearner(object):
             self.inputs = input_uint8
             self.pred_poses = pred_poses
 
-    def preprocess_image(self, image, is_training=False):
+    def preprocess_image(self, image):
         # Assuming input image is uint8
         image = tf.image.convert_image_dtype(image, dtype=tf.float32)
-        #if is_training:
-        #    image = tf.image.random_brightness(image, 0.2)
-        #    image = tf.clip_by_value(image, 0., 1.)
         return image * 2. -1.
 
     def deprocess_image(self, image):
@@ -468,13 +453,12 @@ class SfMLearner(object):
             fetches['depth'] = self.pred_depth
         if mode == 'pose':
             fetches['pose'] = self.pred_poses
-        results = sess.run(fetches, feed_dict={self.inputs:inputs})
+        results = sess.run(fetches, feed_dict={self.inputs:inputs, self.is_training_test:False})
         return results
 
     def save(self, sess, checkpoint_dir, step):
         model_name = 'model'
         print(" [*] Saving checkpoint to %s..." % checkpoint_dir)
-        #self.saver = tf.train.Saver(self.ema.variables_to_restore())
         if step == 'latest':
             self.saver.save(sess,
                             os.path.join(checkpoint_dir, model_name + '.latest'))
