@@ -17,5 +17,5 @@ You can download the best checkpoint so far at
 
 https://drive.google.com/file/d/1jljDcIiSbZcBmkIj6mN25Ft5Y5h8lu0r/view?usp=sharing
 
-The implementation of warping process is located at utils.py, #bilinear_project# function.
-The implementation of our network is in nets.py, #disp_aspp_u_dense# function
+The implementation of warping process is located at utils.py, **_bilinear_project_** function.
+The implementation of our network is in nets.py, **_disp_aspp_u_dense_** function
