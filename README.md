@@ -16,3 +16,6 @@ python kitti_eval/eval_depth.py --kitti_dir=your_dataset_dir --pred_file=pred/yo
 You can download the best checkpoint so far at 
 
 https://drive.google.com/file/d/1jljDcIiSbZcBmkIj6mN25Ft5Y5h8lu0r/view?usp=sharing
+
+The implementation of warping process is located at utils.py, #bilinear_project# function.
+The implementation of our network is in nets.py, #disp_aspp_u_dense# function
